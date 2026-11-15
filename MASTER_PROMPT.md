@@ -1,6 +1,6 @@
 # 🏛️ ContractMind v2.0 — The Ultimate Master Architecture & Reproduction Prompt (A-Z)
 
-> **Document Version:** 2.0.0  
+> **Document Version:** 2.1.0  
 > **Target Project:** ContractMind v2.0 (Autonomous Multi-Agent Legal Intelligence, Negotiation & Deal Room Suite)  
 > **Track:** JusticeSphere_AI — AI Builders Congress 2026  
 > **Repository:** [https://github.com/Faiazzend/JusticeSphereAI](https://github.com/Faiazzend/JusticeSphereAI)
@@ -356,26 +356,33 @@ Expose the following endpoints in `backend/app/main.py` and `api/v1/`:
 - `GET /` & `GET /studio`: Serves `backend/static/index.html`.
 
 ================================================================================
-17. FRONTEND: ALPINE.JS & TAILWIND NEO-LEGAL STUDIO v2.0
+17. FRONTEND: ALPINE.JS & TAILWIND WARM EDITORIAL LEGAL STUDIO v2.1
 ================================================================================
 Implement in `backend/static/index.html` (and sync to `frontend/public/index.html`):
-- Navigation bar with engine indicator, rundown tour trigger, and telemetry switch.
-- Studio Tabs:
-  1. Consensus Redlines (with Risk & Decision filter toolbar, Accept/Reject/Reset toolbar, and AI Prompt Rewriter).
-  2. Side-by-Side Dual-Pane Canvas (Original Draft vs Consensus Redline Draft).
-  3. Playbook Compliance (Adherence Score banner, rule checklist, remediation status).
-  4. Multi-Agent Debate Transcript (Interactive audit log of Auditor, Opposing Counsel, and Arbiter).
-  5. Obligations Matrix (Citation, Obligor, Duty, Trigger, Breach Penalty).
-- Action Bar:
-  - Export Track Changes (.DOCX)
-  - Clean Copy (.DOCX)
-  - Sync Calendar (.ICS)
-  - Ask Copilot Drawer Toggle
-  - Deal Room Multi-Doc Audit Modal Trigger
-- Grounded Copilot Drawer:
-  - Streaming conversational interface, RAG citation pills, quick prompt chips (CFO summary, pushback email, indemnity check).
-- Deal Room Modal:
-  - Multi-contract selection, conflict cards with precedence traps and harmonization recommendations.
+- **Warm Editorial Alabaster, Terracotta & Espresso Design System**:
+  - Background canvas `#F6F3EE` (`sand-100`) with pure white cards (`#FFFFFF`), soft linen inner tiles `#FAF8F5` (`sand-50`), and hairline taupe borders `#EAE4DC` (`sand-200`).
+  - Primary Terracotta / Cognac accent (`brand-600: #8E5333`, hover `brand-700: #754227`, tint `brand-50: #F6EFEA`, border `brand-200: #DBC7B8`).
+  - Deep Espresso Charcoal anchor (`ink-900: #1D1A18`, `ink-800: #2A2522`, muted stone `ink-500: #78716C`) for hero promo card, active segmented tabs, and active floating dock square highlights.
+  - Preserved semantic diff tokens (`diff-ins` emerald `#059669`, `diff-del` crimson `#DC2626`) and provider status dots harmonized on warm linen surfaces.
+- **Home & Ingestion Workspace**:
+  - Top bar with drawer menu toggle, `ContractMind v2.0` branding, pill view switcher (`Ingestion Studio` | `Telemetry & Audits`), live model status indicator, and settings avatar ring.
+  - Editorial display headline (`Review & negotiate contracts with multi-agent precision`) paired with reactive search input (`searchQuery` filtering analyzed contracts via `filteredContracts`) and a square Terracotta (`#8E5333`) filter toggle button (`showHomeFilters`).
+  - Dark Espresso Hero Feature Card (`bg-ink-900`, `rounded-[28px]`) highlighting 4-Agent StateGraph speed with a crisp pure-white pill CTA (`Run Quick Audit`) and PDF upload jump link, plus 3 minimal workflow tiles.
+  - AI Agent Models selector + Terracotta Engine Analytics donut gauge (`#tour-models`, `#tour-analytics`), PDF ingestion dropzone & Playbook cards (`#tour-ingestion`), and 6 Benchmark Deal Templates (`#tour-benchmarks`) with horizontal category pill filters (`All | M&A & IP | Cloud & SaaS | MSA & NDA` with Terracotta active state).
+- **Contract Studio View**:
+  - Boutique detail header with circular `<` back button, centered `"Contract Studio"` label, Deal Room shortcut, warm linen Summary Showcase (`Risk Severity X/100`, accepted count badge), and full Terracotta CTA (`Export Track Changes (.DOCX)`).
+  - Espresso Pill Segmented Tabs (`bg-ink-900` active / `bg-sand-100` inactive):
+    1. Redlines (with Risk & Decision filter toolbar, Accept/Reject/Reset controls, and AI Prompt Rewriter).
+    2. Canvas (Synchronized Dual-Pane Review: Original Draft vs Consensus Redline Draft).
+    3. Compliance (Adherence Score banner, rule checklist, remediation status).
+    4. Debate (Multi-Agent StateGraph log of Auditor, Opposing Counsel, and Arbiter).
+    5. Obligations (Citation, Obligor, Duty, Trigger, Breach Penalty).
+- **Telemetry & Floating Frosted Bottom Dock**:
+  - Telemetry view includes 4 KPI cards paired with a warm linen `Workspace Summary` receipt card (`Analyzed Contracts`, `Total Tokens`, `Active Engine`, `Total Cost`) and full-width Terracotta `Open Cross-Doc Deal Room` button.
+  - Centered floating frosted bottom pill dock (`bg-white/95 backdrop-blur-xl`) highlighting the active route (`home`, `studio`, `audit`) in a Dark Espresso rounded square (`bg-ink-900 text-white`), alongside a Terracotta center upload action button, animated Guided Tour bubble (`?`), and Settings gear trigger.
+- **Grounded Copilot Drawer & Deal Room Modal**:
+  - Dark Espresso Copilot header (`bg-ink-900`), warm alabaster chat transcript (`bg-sand-50`), RAG citation pills, quick prompt chips, and Terracotta message bubbles (`bg-brand-600`).
+  - Deal Room modal with multi-contract selection, conflict cards, precedence traps, and harmonization fixes.
 
 ================================================================================
 18. DEPLOYMENT & PRODUCTION ORCHESTRATION
@@ -405,6 +412,7 @@ Ensure the completed codebase satisfies all criteria:
 13. [x] Synchronized dual-pane canvas displays original text alongside consensus redlines.
 14. [x] Redline risk-level filtering (Critical, High, Medium, Low) and decision filtering with reactive count badges.
 15. [x] Real measured time.time() latency and token cost logged for all agent nodes.
-16. [x] Frontend features 7-step guided tour with glowing halo spotlight and notification bubble.
+16. [x] Frontend features 7-step guided tour with glowing Terracotta halo spotlight and notification bubble.
 17. [x] `npm run build` on frontend completes with zero TypeScript or lint errors.
+18. [x] Warm Editorial Alabaster (`#F6F3EE`), Terracotta (`#8E5333`), & Espresso (`#1D1A18`) UI synced identically between `backend/static/index.html` and `frontend/public/index.html`.
 ```

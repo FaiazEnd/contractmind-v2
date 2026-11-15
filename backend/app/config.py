@@ -1,77 +1,66 @@
-"""Application configuration with Vercel /tmp fallback support."""
+"""Application configuration with automatic Vercel /tmp path fallback."""
+
+from __future__ import annotations
 
 import os
-from functools import lru_cache
 from pathlib import Path
-from typing import List
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+
 def _is_vercel() -> bool:
-    return os.environ.get("VERCEL", "").strip() == "1"
+    return os.environ.get("VERCEL") == "1"
 
 
-def _default_data_root() -> Path:
+def _default_base_data_dir() -> Path:
     if _is_vercel():
         return Path("/tmp/contractmind")
-    return Path(__file__).resolve().parent.parent
+    return BACKEND_ROOT / "data"
 
 
 class Settings(BaseSettings):
-    """Runtime settings for ContractMind v2.0."""
-
-    APP_NAME: str = "ContractMind v2.0"
-    APP_VERSION: str = "2.0.0"
-    DEBUG: bool = False
-
-    VERCEL: str = os.environ.get("VERCEL", "0")
-    DATABASE_URL: str = ""
-    CHROMA_PERSIST_DIR: str = ""
-    UPLOAD_DIR: str = ""
-
-    DEFAULT_LLM_PROVIDER: str = "simulator"
-    GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL: str = "gpt-4o"
-    ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-3-5-sonnet"
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen3.5:4b"
-
-    SECRET_KEY: str = "contractmind-dev-secret-change-in-prod"
-    CORS_ORIGINS: str = "*"
-
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(BACKEND_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
-    def model_post_init(self, __context) -> None:
-        root = _default_data_root()
-        if not self.DATABASE_URL:
-            db_path = root / "contractmind.db"
-            self.DATABASE_URL = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-        if not self.CHROMA_PERSIST_DIR:
-            self.CHROMA_PERSIST_DIR = (root / "chroma_db").as_posix()
-        if not self.UPLOAD_DIR:
-            self.UPLOAD_DIR = (root / "uploads").as_posix()
+    APP_NAME: str = "ContractMind v2.0"
+    APP_VERSION: str = "2.0.0"
+    APP_ENV: str = "development"
+    SECRET_KEY: str = "contractmind-dev-secret-change-in-production"
 
-        Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)
-        Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+    VERCEL: bool = _is_vercel()
 
-    @property
-    def cors_origin_list(self) -> List[str]:
-        if self.CORS_ORIGINS.strip() == "*":
-            return ["*"]
-        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+    DEFAULT_LLM_PROVIDER: str = "simulator"
+    DEFAULT_LLM_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen3.5:4b"
+
+    DATABASE_URL: str = ""
+    UPLOAD_DIR: str = ""
+    CHROMA_PERSIST_DIR: str = ""
+    EXPORT_DIR: str = ""
+
+    def model_post_init(self, __context: object) -> None:
+        base_dir = _default_base_data_dir()
+        if not self.UPLOAD_DIR or self.VERCEL:
+            self.UPLOAD_DIR = str(base_dir / "uploads")
+        if not self.CHROMA_PERSIST_DIR or self.VERCEL:
+            self.CHROMA_PERSIST_DIR = str(base_dir / "chroma")
+        if not self.EXPORT_DIR or self.VERCEL:
+            self.EXPORT_DIR = str(base_dir / "exports")
+        if not self.DATABASE_URL or self.VERCEL:
+            db_path = (base_dir / "contractmind.db").as_posix()
+            self.DATABASE_URL = f"sqlite+aiosqlite:///{db_path}"
+
+        for directory in (base_dir, Path(self.UPLOAD_DIR), Path(self.CHROMA_PERSIST_DIR), Path(self.EXPORT_DIR)):
+            directory.mkdir(parents=True, exist_ok=True)
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
-
-
-settings = get_settings()
+settings = Settings()

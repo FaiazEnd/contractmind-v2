@@ -1,16 +1,17 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import fs from 'node:fs';
+import path from 'node:path';
+import { NextResponse } from 'next/server';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<Response> {
-  const htmlPath = path.join(process.cwd(), "public", "index.html");
-  const html = await fs.readFile(htmlPath, "utf-8");
-  return new Response(html, {
+export async function GET() {
+  const htmlPath = path.join(process.cwd(), 'public', 'index.html');
+  const html = fs.readFileSync(htmlPath, 'utf-8');
+  return new NextResponse(html, {
     status: 200,
     headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
     },
   });
 }

@@ -1,38 +1,31 @@
-"""Corporate Playbook CRUD endpoints."""
+"""Corporate Playbook management endpoints."""
 
 from __future__ import annotations
 
-from typing import List
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.contract import Playbook
-from app.schemas.playbook_schemas import PlaybookCreate, PlaybookResponse, PlaybookUpdate
-from app.services.playbook_engine import ensure_default_playbooks
+from app.schemas.playbook_schemas import PlaybookCreate, PlaybookResponse
 
-router = APIRouter()
+router = APIRouter(prefix="/playbooks", tags=["Playbooks"])
 
 
-@router.get("", response_model=List[PlaybookResponse])
-@router.get("/", response_model=List[PlaybookResponse], include_in_schema=False)
-async def list_playbooks(db: AsyncSession = Depends(get_db)) -> List[Playbook]:
-    """List all configured corporate legal playbooks."""
-    await ensure_default_playbooks(db)
-    res = await db.execute(select(Playbook))
+@router.get("", response_model=list[PlaybookResponse])
+@router.get("/", response_model=list[PlaybookResponse], include_in_schema=False)
+async def list_playbooks(db: AsyncSession = Depends(get_db)) -> list[Playbook]:
+    res = await db.execute(select(Playbook).order_by(Playbook.is_default.desc(), Playbook.name.asc()))
     return list(res.scalars().all())
 
 
-@router.post("", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
-@router.post("/", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
+@router.post("", response_model=PlaybookResponse)
+@router.post("/", response_model=PlaybookResponse, include_in_schema=False)
 async def create_playbook(payload: PlaybookCreate, db: AsyncSession = Depends(get_db)) -> Playbook:
-    """Create a custom corporate legal playbook."""
-    existing = await db.execute(select(Playbook).where(Playbook.name == payload.name))
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=409, detail="Playbook with this name already exists.")
-
+    existing = (await db.execute(select(Playbook).where(Playbook.name == payload.name))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Playbook '{payload.name}' already exists")
     pb = Playbook(
         name=payload.name,
         description=payload.description,
@@ -43,44 +36,3 @@ async def create_playbook(payload: PlaybookCreate, db: AsyncSession = Depends(ge
     await db.commit()
     await db.refresh(pb)
     return pb
-
-
-@router.get("/{playbook_id}", response_model=PlaybookResponse)
-async def get_playbook(playbook_id: str, db: AsyncSession = Depends(get_db)) -> Playbook:
-    res = await db.execute(select(Playbook).where(Playbook.id == playbook_id))
-    pb = res.scalar_one_or_none()
-    if pb is None:
-        raise HTTPException(status_code=404, detail="Playbook not found.")
-    return pb
-
-
-@router.patch("/{playbook_id}", response_model=PlaybookResponse)
-async def update_playbook(
-    playbook_id: str,
-    payload: PlaybookUpdate,
-    db: AsyncSession = Depends(get_db),
-) -> Playbook:
-    res = await db.execute(select(Playbook).where(Playbook.id == playbook_id))
-    pb = res.scalar_one_or_none()
-    if pb is None:
-        raise HTTPException(status_code=404, detail="Playbook not found.")
-    if payload.description is not None:
-        pb.description = payload.description
-    if payload.rules is not None:
-        pb.rules = [r.model_dump() for r in payload.rules]
-    if payload.is_default is not None:
-        pb.is_default = payload.is_default
-    await db.commit()
-    await db.refresh(pb)
-    return pb
-
-
-@router.delete("/{playbook_id}")
-async def delete_playbook(playbook_id: str, db: AsyncSession = Depends(get_db)) -> dict:
-    res = await db.execute(select(Playbook).where(Playbook.id == playbook_id))
-    pb = res.scalar_one_or_none()
-    if pb is None:
-        raise HTTPException(status_code=404, detail="Playbook not found.")
-    await db.delete(pb)
-    await db.commit()
-    return {"status": "deleted", "playbook_id": playbook_id}

@@ -3,195 +3,234 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+import uuid
+from typing import Any
 
-from app.models.contract import Contract
 
-_LAW_RE = re.compile(
-    r"(?:governed by|laws of(?: the)?(?: State of)?)\s+(Delaware|New York|California|Texas|England and Wales|Singapore|Ireland)",
+_GOVERNING_LAW_RE = re.compile(
+    r"(?:governed by|laws of(?: the State of)?|jurisdiction of)\s+(?:the\s+)?(Delaware|New York|California|Texas|England and Wales|United Kingdom|Singapore|Massachusetts|Illinois)",
     re.IGNORECASE,
 )
-_CAP_RE = re.compile(
-    r"(?:aggregate liability|liability.*?shall not exceed|capped at|maximum liability).*?(\$[\d,]+(?:\.\d+)?|\d+\s+months?(?:\s+of)?\s+fees|unlimited|uncapped)",
-    re.IGNORECASE | re.DOTALL,
-)
-_CURE_RE = re.compile(
-    r"(?:cure(?:\s+period|\s+within)?|written notice.*?)(\d+\s*(?:calendar|business)?\s*days?)|terminate immediately without",
+
+_LIABILITY_CAP_RE = re.compile(
+    r"(?:aggregate liability[^.]{0,180}?(?:shall not exceed|capped at|limited to)\s+([^.;]+)|(?:unlimited|uncapped)\s+(?:liability|indemnification)[^.;]*)",
     re.IGNORECASE,
 )
+
+_TERMINATION_WINDOW_RE = re.compile(
+    r"(?:(\d+)\s*(?:calendar\s+|business\s+)?days(?:\s+prior)?\s*(?:written\s+)?(?:notice|cure)|terminate immediately without (?:notice|cure))",
+    re.IGNORECASE,
+)
+
 _PRECEDENCE_RE = re.compile(
-    r"(?:order of precedence|in the event of a conflict|shall prevail over|supersedes)",
+    r"(?:order of precedence|in the event of (?:a )?conflict[^.]*\.)",
     re.IGNORECASE,
 )
 
 
-def _extract_snippet(text: str, pattern: re.Pattern[str]) -> str | None:
-    m = pattern.search(text or "")
-    if not m:
-        return None
-    start = max(0, m.start() - 40)
-    end = min(len(text), m.end() + 80)
-    return " ".join(text[start:end].split())
+def _extract_snippet(text: str, match: re.Match[str], radius: int = 90) -> str:
+    start = max(0, match.start() - radius // 2)
+    end = min(len(text), match.end() + radius)
+    return re.sub(r"\s+", " ", text[start:end]).strip()
 
 
-def analyze_cross_contract_conflicts(contracts: List[Contract]) -> Dict[str, Any]:
-    """Evaluate multiple related contracts for conflicting caps, governing law, termination, and precedence traps."""
-    if len(contracts) < 2:
-        return {
-            "deal_alignment_score": 100.0,
-            "contract_count": len(contracts),
-            "conflicts": [],
-            "summary": "Select at least two agreements to audit cross-contract contradictions.",
+def analyze_deal_room_conflicts(contracts: list[Any]) -> dict[str, Any]:
+    """Detect contradictions across interrelated agreements (MSA, SOW, DPA, M&A, NDA)."""
+    contracts_meta = [
+        {
+            "id": str(c.id),
+            "title": str(c.title),
+            "playbook_name": str(c.playbook_name),
+            "risk_score": float(c.overall_risk_score or 0.0),
         }
+        for c in contracts
+    ]
 
-    conflicts: List[Dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
 
-    # 1. Governing Law & Jurisdiction check
-    laws_found: Dict[str, List[str]] = {}
-    for c in contracts:
-        m = _LAW_RE.search(c.raw_text or "")
-        if m:
-            jurisdiction = m.group(1).strip().title()
-            laws_found.setdefault(jurisdiction, []).append(c.title)
-
-    if len(laws_found) > 1:
-        conflicts.append(
-            {
-                "id": "conflict-governing-law",
-                "conflict_type": "Discrepant Governing Law & Forum Trap",
-                "severity": "HIGH",
-                "involved_contracts": [c.title for c in contracts],
-                "conflicting_terms": {k: v for k, v in laws_found.items()},
-                "precedence_risk_explanation": (
-                    "Related deal documents specify conflicting governing jurisdictions "
-                    f"({', '.join(laws_found.keys())}), creating split-forum litigation exposure."
-                ),
-                "harmonization_clause": (
-                    "All Schedules, SOWs, and Data Processing Addenda executed hereunder shall be governed exclusively "
-                    "by the laws of the State of Delaware, without regard to conflict-of-laws principles, superseding "
-                    "any contrary venue clause in ancillary attachments."
-                ),
-            }
-        )
-
-    # 2. Limitation of Liability Cap divergence
-    cap_profiles: List[Dict[str, str]] = []
+    # 1. Governing Law / Jurisdiction Traps
+    laws_found: list[dict[str, str]] = []
     for c in contracts:
         text = c.raw_text or ""
-        m = _CAP_RE.search(text)
+        m = _GOVERNING_LAW_RE.search(text)
         if m:
-            cap_val = (m.group(1) or "uncapped").strip()
-            cap_profiles.append({"contract": c.title, "cap": cap_val})
-        elif "unlimited liability" in text.lower() or "uncapped" in text.lower():
-            cap_profiles.append({"contract": c.title, "cap": "Uncapped / Unlimited"})
+            laws_found.append(
+                {
+                    "contract_id": str(c.id),
+                    "title": str(c.title),
+                    "jurisdiction": m.group(1).strip().title(),
+                    "excerpt": _extract_snippet(text, m),
+                }
+            )
 
-    distinct_caps = {p["cap"].lower() for p in cap_profiles}
-    if len(distinct_caps) > 1:
+    distinct_laws = {item["jurisdiction"] for item in laws_found}
+    if len(distinct_laws) > 1:
         conflicts.append(
             {
-                "id": "conflict-liability-cap",
-                "conflict_type": "Conflicting Limitation of Liability Caps",
-                "severity": "CRITICAL",
-                "involved_contracts": [p["contract"] for p in cap_profiles],
-                "conflicting_terms": {p["contract"]: p["cap"] for p in cap_profiles},
-                "precedence_risk_explanation": (
-                    "Liability caps diverge across deal agreements. An uncapped or higher-cap ancillary addendum "
-                    "can silently pierce the primary Master Agreement's liability ceiling."
-                ),
-                "harmonization_clause": (
-                    "Notwithstanding anything to the contrary in any SOW, Order Form, or DPA, each party's aggregate "
-                    "cumulative liability across all Transaction Documents shall not exceed 12 months of total fees paid "
-                    "under the applicable Master Agreement, except for gross negligence or willful misconduct."
-                ),
+                "id": str(uuid.uuid4())[:8],
+                "category": "Governing Law & Venue Trap",
+                "severity": "HIGH",
+                "title": f"Conflicting Governing Jurisdictions ({', '.join(sorted(distinct_laws))})",
+                "description": "Related deal documents specify incompatible governing laws and dispute venues, creating forum-shopping and enforceability risk during cross-agreement disputes.",
+                "precedence_risk": "Without a harmonized governing law override, a breach spanning both agreements triggers parallel litigation in conflicting jurisdictions.",
+                "affected_contracts": [item["title"] for item in laws_found],
+                "conflicting_excerpts": [
+                    {"contract": item["title"], "value": item["jurisdiction"], "excerpt": item["excerpt"]}
+                    for item in laws_found
+                ],
+                "harmonization_clause": "All ancillary schedules, SOWs, and DPAs shall be governed exclusively by the laws of the State of Delaware, and Section 12 of the Master Agreement controls over any conflicting venue clause.",
             }
         )
 
-    # 3. Termination & Cure Window Asymmetry
-    cure_profiles: List[Dict[str, str]] = []
+    # 2. Limitation of Liability Cap Discrepancies
+    caps_found: list[dict[str, str]] = []
     for c in contracts:
         text = c.raw_text or ""
-        m = _CURE_RE.search(text)
+        m = _LIABILITY_CAP_RE.search(text)
         if m:
-            val = m.group(1) if m.group(1) else "Immediate termination (0-day cure)"
-            cure_profiles.append({"contract": c.title, "cure": val.strip()})
+            val = (m.group(1) or m.group(0)).strip()
+            caps_found.append(
+                {
+                    "contract_id": str(c.id),
+                    "title": str(c.title),
+                    "cap_value": val[:100],
+                    "excerpt": _extract_snippet(text, m),
+                }
+            )
 
-    distinct_cures = {p["cure"].lower() for p in cure_profiles}
-    if len(distinct_cures) > 1:
-        conflicts.append(
-            {
-                "id": "conflict-termination-cure",
-                "conflict_type": "Asymmetric Termination Notice & Cure Windows",
-                "severity": "HIGH",
-                "involved_contracts": [p["contract"] for p in cure_profiles],
-                "conflicting_terms": {p["contract"]: p["cure"] for p in cure_profiles},
-                "precedence_risk_explanation": (
-                    "One agreement permits immediate termination without cure while a companion agreement mandates "
-                    "a multi-week cure period, creating an accidental cross-default trigger."
-                ),
-                "harmonization_clause": (
-                    "Termination for material breach of any ancillary Schedule or SOW shall require thirty (30) days "
-                    "prior written notice and opportunity to cure, aligned uniformly with the Master Agreement."
-                ),
-            }
-        )
+    if len(caps_found) >= 2:
+        normalized_caps = {re.sub(r"\s+", " ", item["cap_value"].lower()) for item in caps_found}
+        has_uncapped = any("unlimited" in item["cap_value"].lower() or "uncapped" in item["cap_value"].lower() for item in caps_found)
+        if len(normalized_caps) > 1 or has_uncapped:
+            conflicts.append(
+                {
+                    "id": str(uuid.uuid4())[:8],
+                    "category": "Liability Cap Contradiction",
+                    "severity": "CRITICAL" if has_uncapped else "HIGH",
+                    "title": "Divergent Limitation of Liability Caps Across Deal Documents",
+                    "description": "Liability ceilings differ across selected agreements (including uncapped carve-outs or mismatched fee-multiplier caps).",
+                    "precedence_risk": "A plaintiff may claim under whichever instrument offers the higher or uncapped liability ceiling, bypassing the Master Agreement cap.",
+                    "affected_contracts": [item["title"] for item in caps_found],
+                    "conflicting_excerpts": [
+                        {"contract": item["title"], "value": item["cap_value"], "excerpt": item["excerpt"]}
+                        for item in caps_found
+                    ],
+                    "harmonization_clause": "Notwithstanding anything to the contrary in any SOW, DPA, or Schedule, each party's aggregate cumulative liability across all Deal Documents shall not exceed twelve (12) months of fees paid under the Master Agreement (with a 2x super-cap solely for confirmed data breaches).",
+                }
+            )
 
-    # 4. Ambiguous Order of Precedence Trap
-    precedence_hits: List[Dict[str, str]] = []
+    # 3. Termination Notice & Cure Window Asymmetry
+    term_windows: list[dict[str, str]] = []
     for c in contracts:
-        snippet = _extract_snippet(c.raw_text or "", _PRECEDENCE_RE)
-        if snippet:
-            precedence_hits.append({"contract": c.title, "clause": snippet})
+        text = c.raw_text or ""
+        m = _TERMINATION_WINDOW_RE.search(text)
+        if m:
+            val = f"{m.group(1)} days" if m.group(1) else "Immediate (0-day cure)"
+            term_windows.append(
+                {
+                    "contract_id": str(c.id),
+                    "title": str(c.title),
+                    "window": val,
+                    "excerpt": _extract_snippet(text, m),
+                }
+            )
 
-    if len(precedence_hits) >= 1 and any(
-        "prevail over the master" in h["clause"].lower() or "supersedes the msa" in h["clause"].lower()
-        for h in precedence_hits
-    ):
+    if len({item["window"] for item in term_windows}) > 1:
         conflicts.append(
             {
-                "id": "conflict-order-of-precedence",
-                "conflict_type": "Inverted Order of Precedence Trap",
-                "severity": "CRITICAL",
-                "involved_contracts": [h["contract"] for h in precedence_hits],
-                "conflicting_terms": {h["contract"]: h["clause"] for h in precedence_hits},
-                "precedence_risk_explanation": (
-                    "An ancillary document claims precedence over the Master Agreement, potentially overriding "
-                    "enterprise-negotiated indemnities, liability caps, and IP protections."
-                ),
-                "harmonization_clause": (
-                    "In the event of any conflict, the following descending order of precedence shall apply: "
-                    "(1) the Data Processing Addendum solely for privacy/GDPR terms, (2) the Master Services Agreement, "
-                    "and (3) the applicable Statement of Work or Order Form."
-                ),
+                "id": str(uuid.uuid4())[:8],
+                "category": "Termination & Cure Asymmetry",
+                "severity": "HIGH",
+                "title": "Asymmetric Cure & Termination Notice Windows",
+                "description": "Selected contracts establish mismatched cure periods or immediate termination triggers that destabilize dependent obligations.",
+                "precedence_risk": "Termination of an underlying DPA or SaaS schedule with a 0-day cure window can leave the MSA payment stream active while services cease.",
+                "affected_contracts": [item["title"] for item in term_windows],
+                "conflicting_excerpts": [
+                    {"contract": item["title"], "value": item["window"], "excerpt": item["excerpt"]}
+                    for item in term_windows
+                ],
+                "harmonization_clause": "Termination for material breach under any Deal Document requires thirty (30) days prior written notice and opportunity to cure; termination of the Master Agreement shall co-terminate all dependent SOWs and Schedules.",
             }
         )
-    elif not precedence_hits:
+
+    # 4. Order of Precedence & AI/Data Policy Conflict
+    prec_docs = []
+    ai_train_docs = []
+    ai_ban_docs = []
+    for c in contracts:
+        text = c.raw_text or ""
+        if _PRECEDENCE_RE.search(text):
+            prec_docs.append(c.title)
+        lower = text.lower()
+        if any(k in lower for k in ("train machine learning", "train ai", "train its proprietary")):
+            ai_train_docs.append(c.title)
+        if any(k in lower for k in ("shall not train", "prohibit", "never use customer data to train", "strictly prohibited")):
+            ai_ban_docs.append(c.title)
+
+    if ai_train_docs and ai_ban_docs:
         conflicts.append(
             {
-                "id": "conflict-missing-precedence",
-                "conflict_type": "Missing Order of Precedence Hierarchy",
+                "id": str(uuid.uuid4())[:8],
+                "category": "Data & AI Governance Conflict",
+                "severity": "CRITICAL",
+                "title": "AI Model Training Permission vs. DPA Prohibition",
+                "description": f"{', '.join(ai_train_docs)} permits AI/ML model training on Customer Data while {', '.join(ai_ban_docs)} prohibits secondary AI training.",
+                "precedence_risk": "Conflicting data-usage grants create immediate GDPR/CCPA compliance exposure and nullify enterprise AI guardrails.",
+                "affected_contracts": list(dict.fromkeys(ai_train_docs + ai_ban_docs)),
+                "conflicting_excerpts": [
+                    {"contract": t, "value": "Permits AI Training", "excerpt": "Grants license to train AI/ML models on telemetry or inputs."}
+                    for t in ai_train_docs
+                ]
+                + [
+                    {"contract": t, "value": "Prohibits AI Training", "excerpt": "Restricts processing strictly to service delivery."}
+                    for t in ai_ban_docs
+                ],
+                "harmonization_clause": "The Data Processing Addendum's prohibition on AI/ML model training shall strictly supersede any broader data license or service-improvement clause in the MSA, SaaS Agreement, or Order Form.",
+            }
+        )
+    elif len(prec_docs) < len(contracts):
+        conflicts.append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "category": "Order of Precedence Gap",
                 "severity": "MEDIUM",
-                "involved_contracts": [c.title for c in contracts],
-                "conflicting_terms": {c.title: "No explicit conflict-precedence hierarchy clause found" for c in contracts},
-                "precedence_risk_explanation": (
-                    "None of the selected agreements establish a clear contractual order of precedence, leaving "
-                    "conflicting commercial or SLA clauses ambiguous."
-                ),
-                "harmonization_clause": (
-                    "Order of Precedence: In the event of conflict among transaction documents, the Master Agreement "
-                    "shall control unless an Order Form explicitly cites the specific Master section being amended."
-                ),
+                "title": "Missing Harmonized Order-of-Precedence Hierarchy",
+                "description": "Not all agreements in this Deal Room define an explicit order of precedence when commercial schedules conflict with master terms.",
+                "precedence_risk": "Later-dated SOWs or click-through terms may inadvertently override negotiated MSA protections.",
+                "affected_contracts": [c.title for c in contracts],
+                "conflicting_excerpts": [
+                    {"contract": c.title, "value": "Has Precedence Clause" if c.title in prec_docs else "No Explicit Precedence", "excerpt": "Hierarchy ambiguity across multi-document stack."}
+                    for c in contracts
+                ],
+                "harmonization_clause": "Order of Precedence: (1) Data Processing Addendum (for data protection), (2) Master Services Agreement, (3) Executed SOWs (solely as to scope and pricing), and (4) Vendor Policies.",
             }
         )
 
-    penalty = sum(25 if c["severity"] == "CRITICAL" else 15 if c["severity"] == "HIGH" else 8 for c in conflicts)
-    alignment_score = round(max(10.0, 100.0 - penalty), 1)
+    # Compute Deal Alignment Score (0-100%)
+    penalty = 0.0
+    for conf in conflicts:
+        sev = conf["severity"]
+        if sev == "CRITICAL":
+            penalty += 28.0
+        elif sev == "HIGH":
+            penalty += 18.0
+        else:
+            penalty += 10.0
+
+    deal_alignment_score = round(max(12.0, 100.0 - penalty), 1)
+    summary = (
+        f"Audited {len(contracts)} interrelated agreements and detected {len(conflicts)} cross-contract contradiction(s). "
+        + (
+            "Immediate harmonization of liability caps and governing law is recommended prior to execution."
+            if conflicts
+            else "All selected agreements are aligned across core commercial and legal terms."
+        )
+    )
 
     return {
-        "deal_alignment_score": alignment_score,
-        "contract_count": len(contracts),
+        "deal_alignment_score": deal_alignment_score,
+        "contracts_analyzed": contracts_meta,
+        "conflict_count": len(conflicts),
         "conflicts": conflicts,
-        "summary": (
-            f"Audited {len(contracts)} deal room agreements; identified {len(conflicts)} cross-contract "
-            f"contradiction(s) with an overall alignment score of {alignment_score}%."
-        ),
+        "summary": summary,
     }

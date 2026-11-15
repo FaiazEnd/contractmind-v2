@@ -1,156 +1,148 @@
-"""Tests for Multi-Agent StateGraph pipeline, exports, calendar, playbook, and Deal Room."""
+"""End-to-end tests for 4-agent StateGraph, REST endpoints, DOCX/ICS exports, Deal Room, Playbook & MCP."""
+
+from __future__ import annotations
 
 import io
-import sys
-from pathlib import Path
-
+import zipfile
 import pytest
-from docx import Document
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.database import init_db
+from app.main import app
 
-from app.agents.graph import contract_graph
-from app.models.contract import Contract, Playbook
-from app.services.calendar_service import generate_ics_calendar
-from app.services.cross_contract_service import analyze_cross_contract_conflicts
-from app.services.demo_contracts import DEMO_CONTRACTS
-from app.services.export_service import export_clean_docx, export_to_docx
-from app.services.pdf_processor import process_text_document
-from app.services.playbook_engine import DEFAULT_PLAYBOOKS, evaluate_playbook_compliance
+
+@pytest_asyncio.fixture(autouse=True)
+async def _setup_db() -> None:
+    await init_db()
 
 
 @pytest.mark.asyncio
-async def test_stategraph_4_node_pipeline():
-    parsed = process_text_document(DEMO_CONTRACTS["msa"]["text"])
-    initial = {
-        "contract_id": "test-msa-1",
-        "title": DEMO_CONTRACTS["msa"]["title"],
-        "playbook_name": "Standard Corporate Playbook",
-        "raw_text": parsed["raw_text"],
-        "sections": parsed["sections"],
-        "identified_risks": [],
-        "debate_transcript": [],
-        "redlines": [],
-        "obligations": [],
-        "overall_risk_score": 0.0,
-        "risk_summary": {"critical": 0, "high": 0, "medium": 0, "low": 0},
-        "audit_events": [],
-    }
-    out = await contract_graph.ainvoke(initial)
+async def test_full_contractmind_lifecycle() -> None:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Health check
+        h = await client.get("/health")
+        assert h.status_code == 200
+        assert h.json()["status"] == "healthy"
 
-    assert len(out["identified_risks"]) >= 6
-    assert len(out["redlines"]) == len(out["identified_risks"])
-    assert len(out["debate_transcript"]) >= len(out["identified_risks"]) * 3
-    assert len(out["obligations"]) >= 4
-    assert 0.0 < out["overall_risk_score"] <= 100.0
-    assert len(out["audit_events"]) == 4
-    for rl in out["redlines"]:
-        assert any(tok["type"] in ("del", "ins") for tok in rl["diff_tokens"])
+        # 2. Load MSA and Cloud DPA demos (auto-runs 4-Agent StateGraph)
+        r_msa = await client.post("/api/v1/contracts/demo/msa")
+        assert r_msa.status_code == 200
+        msa = r_msa.json()
+        assert msa["status"] == "completed"
+        assert msa["overall_risk_score"] > 0
+        assert len(msa["redlines"]) >= 3
+        assert len(msa["debate_transcript"]) >= 4
+        assert len(msa["obligations"]) >= 2
 
+        r_dpa = await client.post("/api/v1/contracts/demo/cloud_dpa")
+        assert r_dpa.status_code == 200
+        dpa = r_dpa.json()
 
-@pytest.mark.asyncio
-async def test_docx_track_changes_clean_export_and_ics_calendar():
-    parsed = process_text_document(DEMO_CONTRACTS["msa"]["text"])
-    out = await contract_graph.ainvoke(
-        {
-            "contract_id": "test-export-1",
-            "title": "Test MSA Agreement",
-            "playbook_name": "Standard Corporate Playbook",
-            "raw_text": parsed["raw_text"],
-            "sections": parsed["sections"],
-            "identified_risks": [],
-            "debate_transcript": [],
-            "redlines": [],
-            "obligations": [],
-            "overall_risk_score": 0.0,
-            "risk_summary": {},
-            "audit_events": [],
+        msa_id = msa["id"]
+        dpa_id = dpa["id"]
+        redline_0 = msa["redlines"][0]["id"]
+        redline_1 = msa["redlines"][1]["id"]
+
+        # 3. Clause-level Accept / Reject decisions via PATCH
+        p1 = await client.patch(f"/api/v1/analysis/{msa_id}/redlines/{redline_0}", json={"accepted": True})
+        assert p1.status_code == 200
+        assert p1.json()["redline"]["accepted"] is True
+
+        p2 = await client.patch(f"/api/v1/analysis/{msa_id}/redlines/{redline_1}", json={"accepted": False})
+        assert p2.status_code == 200
+        assert p2.json()["redline"]["accepted"] is False
+
+        # 4. Filtered redlines query
+        f_acc = await client.get(f"/api/v1/analysis/{msa_id}/redlines?decision=ACCEPTED")
+        assert f_acc.status_code == 200
+        assert f_acc.json()["filtered_count"] == 1
+
+        # 5. On-demand AI Prompt Rewriting
+        regen = await client.post(
+            f"/api/v1/analysis/{msa_id}/redlines/{redline_1}/regenerate",
+            json={"custom_prompt": "Cap at 24 months fees with mutual reciprocal carve-out"},
+        )
+        assert regen.status_code == 200
+        regen_rl = regen.json()["redline"]
+        assert regen_rl["accepted"] is None
+        assert "twenty-four (24) months" in regen_rl["suggested_text"] or "mutual" in regen_rl["suggested_text"].lower()
+        assert len(regen_rl["diff_tokens"]) > 0
+
+        # Re-reject redline_1 so DOCX export tests both accepted and rejected handling
+        await client.patch(f"/api/v1/analysis/{msa_id}/redlines/{redline_1}", json={"accepted": False})
+
+        # 6. Track Changes DOCX export (verify OpenXML <w:del> and <w:ins> tags)
+        docx_resp = await client.get(f"/api/v1/analysis/{msa_id}/export/docx")
+        assert docx_resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(docx_resp.content)) as zf:
+            doc_xml = zf.read("word/document.xml").decode("utf-8")
+            assert "<w:del " in doc_xml or "w:del " in doc_xml
+            assert "<w:ins " in doc_xml or "w:ins " in doc_xml
+            assert "ACCEPTED" in doc_xml
+            assert "REJECTED" in doc_xml
+
+        # 7. Clean Executable DOCX export (no Track Changes markup tags)
+        clean_resp = await client.get(f"/api/v1/analysis/{msa_id}/export/clean")
+        assert clean_resp.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(clean_resp.content)) as zf:
+            clean_xml = zf.read("word/document.xml").decode("utf-8")
+            assert "<w:del " not in clean_xml
+            assert "<w:ins " not in clean_xml
+
+        # 8. RFC 5545 iCalendar export
+        ics_resp = await client.get(f"/api/v1/analysis/{msa_id}/export/calendar")
+        assert ics_resp.status_code == 200
+        ics_text = ics_resp.text
+        assert "BEGIN:VCALENDAR" in ics_text
+        assert "BEGIN:VEVENT" in ics_text
+        assert "[ContractMind]" in ics_text
+
+        # 9. Playbook compliance score
+        comp = await client.get(f"/api/v1/analysis/{msa_id}/compliance/playbook")
+        assert comp.status_code == 200
+        comp_json = comp.json()
+        assert 0.0 <= comp_json["adherence_score"] <= 100.0
+        assert comp_json["verdict"] in {
+            "STRONG COMPLIANCE",
+            "ACCEPTABLE WITH REDLINES",
+            "HIGH DEVIATION / HIGH RISK",
         }
-    )
-    redlines = out["redlines"]
-    redlines[0]["accepted"] = True
-    if len(redlines) > 1:
-        redlines[1]["accepted"] = False
 
-    contract = Contract(
-        id="test-export-1",
-        title="Test MSA Agreement",
-        original_filename="test_msa.pdf",
-        raw_text=parsed["raw_text"],
-        playbook_name="Standard Corporate Playbook",
-        overall_risk_score=out["overall_risk_score"],
-        extracted_sections=parsed["sections"],
-        identified_risks=out["identified_risks"],
-        debate_transcript=out["debate_transcript"],
-        redlines=redlines,
-        obligations=out["obligations"],
-        risk_summary=out["risk_summary"],
-    )
+        # 10. Deal Room Cross-Contract Contradiction Audit (MSA vs Cloud DPA)
+        dr = await client.post("/api/v1/analysis/deal-room/conflicts", json=[msa_id, dpa_id])
+        assert dr.status_code == 200
+        dr_json = dr.json()
+        assert dr_json["conflict_count"] >= 2
+        assert 0.0 <= dr_json["deal_alignment_score"] <= 100.0
 
-    tracked_bytes = export_to_docx(contract)
-    tracked_doc = Document(io.BytesIO(tracked_bytes))
-    xml_str = tracked_doc.element.xml
-    assert "w:del" in xml_str
-    assert "w:ins" in xml_str
-    assert "ContractMind Legal AI" in xml_str
+        # 11. Grounded Legal AI Copilot
+        cop = await client.post(
+            f"/api/v1/copilot/{msa_id}/chat",
+            json={"message": "Generate a CFO Risk Summary for uncapped indemnification"},
+        )
+        assert cop.status_code == 200
+        cop_json = cop.json()
+        assert len(cop_json["citations"]) >= 1
+        assert "Risk" in cop_json["answer"]
 
-    clean_bytes = export_clean_docx(contract)
-    clean_doc = Document(io.BytesIO(clean_bytes))
-    clean_xml = clean_doc.element.xml
-    assert "w:del" not in clean_xml
-    assert "w:ins" not in clean_xml
-    assert "CLEAN EXECUTION DRAFT" in "\n".join(p.text for p in clean_doc.paragraphs)
+        # 12. MCP JSON-RPC 2.0 server
+        mcp_tools = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert mcp_tools.status_code == 200
+        assert len(mcp_tools.json()["result"]["tools"]) >= 4
 
-    ics = generate_ics_calendar(contract)
-    assert "BEGIN:VCALENDAR" in ics
-    assert "BEGIN:VEVENT" in ics
-    assert "STATUS:CONFIRMED" in ics
-    assert "[ContractMind]" in ics
+        # 13. Audit telemetry summary
+        tel = await client.get("/api/v1/analysis/audit/summary")
+        assert tel.status_code == 200
+        assert tel.json()["total_calls"] >= 8
+        assert tel.json()["total_tokens"] > 0
 
+        # 14. Delete contracts & purge telemetry
+        del1 = await client.delete(f"/api/v1/contracts/{msa_id}")
+        assert del1.status_code == 200
+        del2 = await client.delete(f"/api/v1/contracts/{dpa_id}")
+        assert del2.status_code == 200
 
-@pytest.mark.asyncio
-async def test_playbook_compliance_and_deal_room_conflicts():
-    msa_parsed = process_text_document(DEMO_CONTRACTS["msa"]["text"])
-    out = await contract_graph.ainvoke(
-        {
-            "contract_id": "msa-1",
-            "title": DEMO_CONTRACTS["msa"]["title"],
-            "playbook_name": "Standard Corporate Playbook",
-            "raw_text": msa_parsed["raw_text"],
-            "sections": msa_parsed["sections"],
-            "identified_risks": [],
-            "debate_transcript": [],
-            "redlines": [],
-            "obligations": [],
-            "overall_risk_score": 0.0,
-            "risk_summary": {},
-            "audit_events": [],
-        }
-    )
-    msa = Contract(
-        id="msa-1",
-        title=DEMO_CONTRACTS["msa"]["title"],
-        original_filename="msa.pdf",
-        raw_text=msa_parsed["raw_text"],
-        playbook_name="Standard Corporate Playbook",
-        overall_risk_score=out["overall_risk_score"],
-        extracted_sections=msa_parsed["sections"],
-        redlines=out["redlines"],
-    )
-    dpa = Contract(
-        id="dpa-1",
-        title=DEMO_CONTRACTS["cloud_dpa"]["title"],
-        original_filename="dpa.pdf",
-        raw_text=DEMO_CONTRACTS["cloud_dpa"]["text"],
-        playbook_name="Standard Corporate Playbook",
-    )
-
-    pb = Playbook(**DEFAULT_PLAYBOOKS[0])
-    report = evaluate_playbook_compliance(msa, pb)
-    assert 0.0 <= report["adherence_score"] <= 100.0
-    assert report["remediated_count"] >= 1
-
-    conflicts = analyze_cross_contract_conflicts([msa, dpa])
-    assert conflicts["contract_count"] == 2
-    assert len(conflicts["conflicts"]) >= 2
-    assert any("Governing Law" in c["conflict_type"] for c in conflicts["conflicts"])
+        reset = await client.delete("/api/v1/analysis/audit/reset")
+        assert reset.status_code == 200

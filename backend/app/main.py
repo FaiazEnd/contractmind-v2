@@ -1,14 +1,15 @@
-"""ContractMind v2.0 FastAPI entrypoint with lifespan DB init, REST v1, MCP gateway, and Studio UI."""
+"""ContractMind v2.0 FastAPI Entrypoint with Lifespan DB Initialization, API Routers, MCP Gateway & Studio SPA."""
 
 from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncGenerator
 
-BACKEND_ROOT = Path(__file__).resolve().parent.parent
-if str(BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(BACKEND_ROOT))
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,14 +19,15 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1 import analysis, auth, contracts, copilot, playbook, stream
 from app.config import settings
 from app.database import ensure_db_initialized
-from app.mcp_server.fastserver import router as mcp_router
+from app.mcp_server.fastserver import mcp_router
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR = BACKEND_DIR / "static"
+INDEX_HTML = STATIC_DIR / "index.html"
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+    """Initialize SQLite schema and default playbooks on startup."""
     await ensure_db_initialized()
     yield
 
@@ -39,34 +41,37 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# API v1 routers
-app.include_router(contracts.router, prefix="/api/v1/contracts", tags=["Contracts"])
-app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis & Deal Room"])
-app.include_router(copilot.router, prefix="/api/v1/copilot", tags=["Legal AI Copilot"])
-app.include_router(playbook.router, prefix="/api/v1/playbooks", tags=["Playbooks"])
-app.include_router(stream.router, prefix="/api/v1/stream", tags=["Streaming"])
-app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
+# API v1 Routers
+app.include_router(contracts.router, prefix="/api/v1")
+app.include_router(analysis.router, prefix="/api/v1")
+app.include_router(copilot.router, prefix="/api/v1")
+app.include_router(playbook.router, prefix="/api/v1")
+app.include_router(stream.router, prefix="/api/v1")
+app.include_router(auth.router, prefix="/api/v1")
 
-# Model Context Protocol (MCP) JSON-RPC gateway
-app.include_router(mcp_router, prefix="/mcp", tags=["MCP Gateway"])
+# Model Context Protocol (MCP) Gateway
+app.include_router(mcp_router)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-@app.get("/health", tags=["System"])
+@app.get("/health")
 async def health_check() -> JSONResponse:
+    """Service health probe."""
     return JSONResponse({"status": "healthy", "version": "2.0.0"})
 
 
 @app.get("/", include_in_schema=False)
 @app.get("/studio", include_in_schema=False)
 async def serve_studio() -> FileResponse:
-    index_path = STATIC_DIR / "index.html"
-    return FileResponse(str(index_path), media_type="text/html")
+    """Serve the Warm Editorial Neo-Legal Studio v2.1 Single-Page Application."""
+    if not INDEX_HTML.exists():
+        return JSONResponse({"error": "Frontend index.html not found"}, status_code=404)  # type: ignore[return-value]
+    return FileResponse(str(INDEX_HTML), media_type="text/html")

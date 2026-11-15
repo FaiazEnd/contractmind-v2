@@ -1,1 +1,1 @@
-"""Pydantic schema exports."""
+"""Pydantic API schemas package."""

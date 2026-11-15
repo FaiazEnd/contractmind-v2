@@ -1,136 +1,180 @@
-"""Obligation Extractor Agent Node: extracts payment, audit, deletion, insurance, SLA, and notice duties."""
+"""Obligation Extractor Agent Node: Operational duties, triggers, recurrence, and breach penalties."""
 
 from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict, List
+from datetime import datetime, timezone
+from typing import Any
 
 from app.agents.llm_client import llm_gateway
-from app.agents.state import ContractAgentState
+from app.agents.state import ContractGraphState
 
-OBLIGATION_RULES: List[Dict[str, Any]] = [
+
+_OBLIGATION_PATTERNS: list[dict[str, Any]] = [
     {
         "obligation_type": "Payment",
-        "pattern": re.compile(r"(?:invoice|net\s+\d+|fee|payment|remit|payable\s+within)", re.IGNORECASE),
+        "pattern": re.compile(r"(?:net\s*\d+|pay\s+(?:all\s+)?invoices|within\s+\d+\s+days\s+of\s+invoice|annual\s+fee|subscription\s+fee)", re.IGNORECASE),
         "obligor": "Customer",
-        "recipient": "Provider",
-        "default_trigger": "Net 30 days from invoice receipt",
-        "recurrence": "Recurring (Per Invoice / Annual)",
-        "default_penalty": "1.5% monthly late interest or service suspension after notice",
+        "recipient": "Vendor / Provider",
+        "default_trigger": "Net 30 days from invoice date",
+        "recurrence": "Monthly / Annual",
+        "penalty": "1.5% monthly late interest and potential service suspension",
     },
     {
         "obligation_type": "Security Audit",
-        "pattern": re.compile(r"(?:soc\s*2|iso\s*27001|audit|security\s+assessment|penetration\s+test)", re.IGNORECASE),
-        "obligor": "Provider",
+        "pattern": re.compile(r"(?:soc\s*2|iso\s*27001|security\s+audit|penetration\s+test|audit\s+rights)", re.IGNORECASE),
+        "obligor": "Vendor / Processor",
         "recipient": "Customer",
-        "default_trigger": "Annually upon 30 days written request",
+        "default_trigger": "Within 30 days of annual request",
         "recurrence": "Annual",
-        "default_penalty": "Material breach / regulatory remediation obligation",
+        "penalty": "Mandatory remediation plan or termination for material breach",
     },
     {
         "obligation_type": "Data Deletion",
-        "pattern": re.compile(r"(?:delet(?:e|ion)|destroy|return\s+(?:all\s+)?customer\s+data|purg(?:e|ing)|retain)", re.IGNORECASE),
-        "obligor": "Provider",
+        "pattern": re.compile(r"(?:delete|destroy|return\s+(?:all\s+)?customer\s+data|purge\s+data|data\s+deletion)", re.IGNORECASE),
+        "obligor": "Vendor / Processor",
         "recipient": "Customer",
-        "default_trigger": "Within 30 days of agreement termination",
+        "default_trigger": "Within 30 days after termination",
         "recurrence": "Upon Termination",
-        "default_penalty": "Privacy indemnification & injunctive relief",
+        "penalty": "GDPR/CCPA regulatory liability and breach indemnity",
     },
     {
         "obligation_type": "Insurance",
-        "pattern": re.compile(r"(?:insurance|cyber\s+liability|errors\s+and\s+omissions|certificate\s+of\s+insurance|coverage)", re.IGNORECASE),
-        "obligor": "Provider",
+        "pattern": re.compile(r"(?:cyber\s+liability|commercial\s+general\s+liability|errors\s+and\s+omissions|insurance\s+coverage|certificate\s+of\s+insurance)", re.IGNORECASE),
+        "obligor": "Vendor / Provider",
         "recipient": "Customer",
-        "default_trigger": "Maintained continuously; certificate within 15 days of renewal",
-        "recurrence": "Annual",
-        "default_penalty": "Suspension of onboarding / breach of representation",
+        "default_trigger": "Within 15 days of Effective Date",
+        "recurrence": "Annual Renewal",
+        "penalty": "Breach of covenant and suspension of SOW awards",
     },
     {
         "obligation_type": "Service Credits",
-        "pattern": re.compile(r"(?:uptime|sla|service\s+level|availability|service\s+credit|99\.\d+%)", re.IGNORECASE),
-        "obligor": "Provider",
+        "pattern": re.compile(r"(?:service\s+credit|uptime|99\.\d+%\s+availability|sla\s+credit|downtime)", re.IGNORECASE),
+        "obligor": "Vendor / Provider",
         "recipient": "Customer",
-        "default_trigger": "Within 30 days following monthly SLA shortfall claim",
-        "recurrence": "Monthly SLA Window",
-        "default_penalty": "10% to 25% monthly fee service credit or termination right",
+        "default_trigger": "Within 15 days of monthly SLA claim",
+        "recurrence": "Monthly",
+        "penalty": "10%-25% monthly fee credit and chronic SLA termination right",
     },
     {
         "obligation_type": "Notice Requirements",
-        "pattern": re.compile(r"(?:written\s+notice|non-renewal|breach\s+notification|security\s+incident|72\s*hours|subprocessor)", re.IGNORECASE),
+        "pattern": re.compile(r"(?:written\s+notice|prior\s+notice|breach\s+notification|within\s+\d+\s+hours|non-renewal\s+notice)", re.IGNORECASE),
         "obligor": "Both Parties",
-        "recipient": "Designated Legal Contacts",
-        "default_trigger": "72 hours (security incident) / 30 days (renewal or breach)",
-        "recurrence": "Event-Driven",
-        "default_penalty": "Automatic renewal lock-in or waiver of claim/cure defense",
+        "recipient": "Counterparty Legal Notice Contact",
+        "default_trigger": "Within 48 hours (security) / 30 days (renewal/cure)",
+        "recurrence": "Event-driven",
+        "penalty": "Waiver of claim or automatic term extension",
     },
 ]
 
-_TIMING_RE = re.compile(
-    r"((?:within\s+)?\d+\s*(?:calendar|business)?\s*(?:days?|hours?|months?)|net\s+\d+|annually|monthly|upon\s+termination)",
-    re.IGNORECASE,
-)
+
+def _extract_trigger(sentence: str, default_trigger: str) -> str:
+    m = re.search(
+        r"(within\s+\d+\s+(?:calendar\s+|business\s+)?(?:days?|hours?)|net\s*\d+|\d+\s+days\s+prior)",
+        sentence,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    return default_trigger
 
 
-async def obligation_node(state: ContractAgentState) -> ContractAgentState:
-    """Extract structured operational obligations from contract sections."""
-    t0 = time.time()
-    sections: List[Dict[str, Any]] = list(state.get("sections") or [])
-    audit_events: List[Dict[str, Any]] = list(state.get("audit_events") or [])
-    obligations: List[Dict[str, Any]] = []
-    seen_types = set()
+def _extract_sentence(text: str, match: re.Match[str]) -> str:
+    start = text.rfind(".", 0, match.start())
+    start = 0 if start == -1 else start + 1
+    end = text.find(".", match.end())
+    end = len(text) if end == -1 else end + 1
+    return re.sub(r"\s+", " ", text[start:end]).strip()
+
+
+async def obligation_node(state: ContractGraphState) -> ContractGraphState:
+    """Extract structured operational commitments and deadlines into the obligation matrix."""
+    start = time.time()
+    sections = state.get("sections") or []
+    if not sections and state.get("raw_text"):
+        sections = [{"section_number": "1", "title": "General Terms", "text": state["raw_text"], "page_number": 1}]
+
+    obligations: list[dict[str, Any]] = []
+    seen_types: set[str] = set()
 
     for sec in sections:
         sec_num = str(sec.get("section_number", "1"))
-        sec_title = str(sec.get("title", f"Section {sec_num}"))
+        sec_title = str(sec.get("title", "General"))
         sec_text = str(sec.get("text", ""))
-
-        for rule in OBLIGATION_RULES:
-            ob_type = rule["obligation_type"]
-            if ob_type in seen_types:
+        for spec in _OBLIGATION_PATTERNS:
+            if spec["obligation_type"] in seen_types:
                 continue
-            match = rule["pattern"].search(sec_text)
-            if match:
-                seen_types.add(ob_type)
-                timing_match = _TIMING_RE.search(sec_text)
-                trigger = timing_match.group(1).strip() if timing_match else rule["default_trigger"]
-                snippet = " ".join(sec_text.split())[:220]
+            m = spec["pattern"].search(sec_text)
+            if m:
+                seen_types.add(spec["obligation_type"])
+                sentence = _extract_sentence(sec_text, m)
+                trigger = _extract_trigger(sentence, spec["default_trigger"])
                 obligations.append(
                     {
                         "clause_reference": f"Section {sec_num} ({sec_title})",
-                        "obligation_type": ob_type,
-                        "obligor": rule["obligor"],
-                        "recipient": rule["recipient"],
-                        "description": snippet,
+                        "obligation_type": spec["obligation_type"],
+                        "obligor": spec["obligor"],
+                        "recipient": spec["recipient"],
+                        "description": sentence[:280],
                         "due_date_or_trigger": trigger,
-                        "recurrence": rule["recurrence"],
-                        "penalty_for_breach": rule["default_penalty"],
+                        "recurrence": spec["recurrence"],
+                        "penalty_for_breach": spec["penalty"],
                     }
                 )
 
-    llm_res = await llm_gateway.generate(
-        prompt=(
-            f"Verify {len(obligations)} extracted obligations for '{state.get('title', 'Agreement')}': "
-            + ", ".join(o["obligation_type"] for o in obligations)
-        ),
-        system_instruction="You are the Obligation Extractor Agent producing calendar and compliance matrices.",
-        fallback_text=f"Extracted {len(obligations)} structured obligations across 6 operational categories.",
+    def _fallback_ob() -> str:
+        return (
+            f"Extracted {len(obligations)} operational obligation(s) across Payment, Security Audit, "
+            "Data Deletion, Insurance, Service Credits, and Notice Requirements for RFC 5545 calendar sync."
+        )
+
+    llm_resp = await llm_gateway.generate(
+        prompt=f"Summarize {len(obligations)} extracted contractual obligations for {state.get('title', 'Contract')}.",
+        system_prompt="You are the Obligation Extractor Agent. Summarize extracted operational duties in 1 sentence.",
+        fallback_fn=_fallback_ob,
     )
 
-    latency_ms = round((time.time() - t0) * 1000.0, 2)
-    audit_events.append(
+    now_iso = datetime.now(timezone.utc).isoformat()
+    transcript = list(state.get("debate_transcript") or [])
+    transcript.append(
         {
-            "agent_name": "Obligation Extractor Agent",
-            "action": "obligation_matrix_extraction",
-            "model_name": llm_res.model_name,
-            "prompt_tokens": llm_res.prompt_tokens,
-            "completion_tokens": llm_res.completion_tokens,
-            "total_tokens": llm_res.total_tokens,
-            "latency_ms": max(latency_ms, llm_res.latency_ms),
-            "estimated_cost_usd": llm_res.estimated_cost_usd,
+            "agent": "Obligation Extractor",
+            "role": "Calendar & Penalty Monitor",
+            "section_number": "Obligations",
+            "stance": f"{len(obligations)} Duties Mapped",
+            "message": llm_resp.text,
+            "timestamp": now_iso,
         }
     )
 
-    state["obligations"] = obligations
-    state["audit_events"] = audit_events
-    return state
+    total_latency_ms = round((time.time() - start) * 1000.0, 2)
+    audit_records = list(state.get("audit_records") or [])
+    audit_records.append(
+        {
+            "agent_name": "Obligation Extractor",
+            "action": "obligation_matrix_extraction",
+            "model_name": llm_resp.model_name,
+            "prompt_tokens": llm_resp.prompt_tokens,
+            "completion_tokens": llm_resp.completion_tokens,
+            "total_tokens": llm_resp.total_tokens,
+            "latency_ms": max(total_latency_ms, llm_resp.latency_ms),
+            "estimated_cost_usd": llm_resp.estimated_cost_usd,
+        }
+    )
+
+    if state.get("event_emitter"):
+        await state["event_emitter"](
+            {
+                "node": "obligation_node",
+                "status": "completed",
+                "obligations_extracted": len(obligations),
+            }
+        )
+
+    return {
+        **state,
+        "obligations": obligations,
+        "debate_transcript": transcript,
+        "audit_records": audit_records,
+    }

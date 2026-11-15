@@ -1,57 +1,52 @@
-"""Pydantic schemas for corporate playbooks and compliance evaluations."""
+"""Playbook and compliance audit schemas."""
 
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
 
 
 class PlaybookRule(BaseModel):
+    id: str
     category: str
     standard_requirement: str
-    unacceptable_terms: List[str] = Field(default_factory=list)
+    unacceptable_terms: list[str] = Field(default_factory=list)
     preferred_fallback: str
     severity_if_missing: str = "HIGH"
 
 
 class PlaybookCreate(BaseModel):
-    name: str = Field(..., min_length=2, max_length=100)
+    name: str
     description: str = ""
-    rules: List[PlaybookRule] = Field(default_factory=list)
+    rules: list[PlaybookRule] = Field(default_factory=list)
     is_default: bool = False
 
 
-class PlaybookUpdate(BaseModel):
-    description: Optional[str] = None
-    rules: Optional[List[PlaybookRule]] = None
-    is_default: Optional[bool] = None
-
-
 class PlaybookResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: str
     name: str
     description: str
-    rules: List[Dict[str, Any]]
+    rules: list[PlaybookRule]
     is_default: bool
 
 
-class PlaybookRuleCheck(BaseModel):
+class RuleComplianceItem(BaseModel):
+    rule_id: str
     category: str
-    severity_if_missing: str
-    status: str  # "COMPLIANT" | "REMEDIATED_BY_REDLINE" | "NON_COMPLIANT"
-    matched_unacceptable_terms: List[str] = Field(default_factory=list)
-    remediated_by_redline_id: Optional[str] = None
-    finding: str
-    preferred_fallback: str
+    severity: str
+    standard_requirement: str
+    status: str  # COMPLIANT | REMEDIATED_BY_REDLINE | DEVIATION
+    matched_unacceptable_terms: list[str] = Field(default_factory=list)
+    remediation_note: str = ""
+    preferred_fallback: str = ""
 
 
-class PlaybookComplianceReport(BaseModel):
+class PlaybookComplianceResult(BaseModel):
     contract_id: str
     playbook_name: str
     adherence_score: float
-    verdict: str  # "STRONG COMPLIANCE" | "ACCEPTABLE WITH REDLINES" | "HIGH DEVIATION / HIGH RISK"
+    verdict: str  # STRONG COMPLIANCE | ACCEPTABLE WITH REDLINES | HIGH DEVIATION / HIGH RISK
     total_rules: int
     compliant_count: int
     remediated_count: int
-    non_compliant_count: int
-    rule_checks: List[PlaybookRuleCheck]
+    deviation_count: int
+    checklist: list[RuleComplianceItem] = Field(default_factory=list)

@@ -1,54 +1,55 @@
-"""Pydantic schemas for risk findings, debate turns, LLM config, and telemetry."""
+"""Risk, redline, diff token, and debate transcript Pydantic schemas."""
 
-from typing import Dict, List, Optional
+from __future__ import annotations
+
+from typing import Literal
 from pydantic import BaseModel, Field
+
+
+SeverityLevel = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+
+
+class DiffToken(BaseModel):
+    type: Literal["equal", "del", "ins"]
+    text: str
 
 
 class IdentifiedRisk(BaseModel):
     id: str
     category: str
-    severity: str  # CRITICAL | HIGH | MEDIUM | LOW
+    severity: SeverityLevel
     score: float
     section_number: str
-    section_title: str
+    section_title: str = ""
     matched_excerpt: str
     legal_rationale: str
     suggested_mitigation: str
 
 
-class DebateTurn(BaseModel):
-    turn_index: int
-    agent_name: str
-    role: str
+class RedlineItem(BaseModel):
+    id: str
     section_number: str
-    risk_category: str
-    argument: str
-    timestamp: str
+    original_text: str
+    suggested_text: str
+    diff_type: str = "modification"
+    risk_severity: SeverityLevel
+    legal_rationale: str
+    diff_tokens: list[DiffToken] = Field(default_factory=list)
+    accepted: bool | None = None
+    custom_prompt: str | None = None
 
 
-class LLMConfigRequest(BaseModel):
-    default_provider: Optional[str] = None
-    gemini_api_key: Optional[str] = None
-    gemini_model: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    openai_model: Optional[str] = None
-    anthropic_api_key: Optional[str] = None
-    anthropic_model: Optional[str] = None
-    ollama_base_url: Optional[str] = None
-    ollama_model: Optional[str] = None
+class DebateTurn(BaseModel):
+    agent: str
+    role: str
+    section_number: str = "General"
+    stance: str = ""
+    message: str
+    timestamp: str = ""
 
 
-class LLMConfigStatus(BaseModel):
-    default_provider: str
-    providers: Dict[str, Dict[str, object]]
-
-
-class AuditSummaryResponse(BaseModel):
-    total_records: int
-    total_prompt_tokens: int
-    total_completion_tokens: int
-    total_tokens: int
-    total_estimated_cost_usd: float
-    avg_latency_ms: float
-    by_agent: List[Dict[str, object]] = Field(default_factory=list)
-    by_model: List[Dict[str, object]] = Field(default_factory=list)
+class RiskSummary(BaseModel):
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0

@@ -1,1 +1,1 @@
-"""Multi-agent orchestration package."""
+"""Multi-Agent StateGraph package."""

@@ -1,67 +1,53 @@
-"""Tests for PDF ingestion, PyMuPDF table extraction, PII redaction, and section segmentation."""
+"""Tests for PyMuPDF PDF ingestion, Markdown table extraction, PII redaction, and section segmentation."""
+
+from __future__ import annotations
 
 import io
-import sys
-from pathlib import Path
-
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.services.pdf_processor import process_pdf_bytes, redact_pii, table_to_markdown
+from app.services.pdf_processor import process_pdf_bytes, redact_pii
 
 
-def test_pii_redaction_patterns():
+def test_pii_redactor_removes_all_sensitive_patterns() -> None:
     sample = (
-        "SSN: 123-45-6789, Card: 4111-2222-3333-4444, "
-        "EIN: 12-3456789, Bank Account: 987654321012."
+        "Signer SSN: 123-45-6789, Corporate Card: 4111-2222-3333-4444, "
+        "Company EIN: 12-3456789, Escrow Account: 987654321012."
     )
-    cleaned = redact_pii(sample)
-    assert "[REDACTED_SSN]" in cleaned
-    assert "[REDACTED_CC]" in cleaned
-    assert "[REDACTED_EIN]" in cleaned
-    assert "[REDACTED_BANK_ACCT]" in cleaned
-    assert "123-45-6789" not in cleaned
-    assert "4111-2222-3333-4444" not in cleaned
-    assert "12-3456789" not in cleaned
-    assert "987654321012" not in cleaned
+    redacted = redact_pii(sample)
+    assert "123-45-6789" not in redacted
+    assert "4111-2222-3333-4444" not in redacted
+    assert "12-3456789" not in redacted
+    assert "987654321012" not in redacted
+    assert "[REDACTED_SSN]" in redacted
+    assert "[REDACTED_CC]" in redacted
+    assert "[REDACTED_EIN]" in redacted
+    assert "[REDACTED_BANK_ACCT]" in redacted
 
 
-def test_table_to_markdown():
-    rows = [["Tier", "SLA", "Fee"], ["Enterprise", "99.99%", "$120,000"]]
-    md = table_to_markdown(rows)
-    assert "| Tier | SLA | Fee |" in md
-    assert "| --- | --- | --- |" in md
-    assert "| Enterprise | 99.99% | $120,000 |" in md
-
-
-def test_pymupdf_pdf_extraction_with_table_and_pii():
+def test_pymupdf_pdf_table_extraction_and_segmentation() -> None:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter)
     styles = getSampleStyleSheet()
     story = [
-        Paragraph("Section 1. Customer Billing & Tax Identifiers", styles["Normal"]),
-        Paragraph(
-            "Billing contact SSN 123-45-6789 and Tax ID 98-7654321 with settlement account 1029384756.",
-            styles["Normal"],
-        ),
+        Paragraph("Section 1. Pricing Schedule", styles["Normal"]),
+        Paragraph("Customer SSN 123-45-6789 shall pay net 30 days per table below.", styles["Normal"]),
         Table(
-            [["Milestone", "Amount", "Due"], ["Signing", "$50,000", "Net 30"]],
+            [["Tier", "Annual Fee", "SLA"], ["Enterprise", "$120,000", "99.9%"]],
             style=TableStyle([("GRID", (0, 0), (-1, -1), 1, colors.black)]),
         ),
-        Paragraph("Section 2. Limitation of Liability", styles["Normal"]),
-        Paragraph("Provider aggregate liability is capped at 12 months fees.", styles["Normal"]),
+        Paragraph("Section 2. Liability", styles["Normal"]),
+        Paragraph("Vendor provides uncapped indemnification without any cap.", styles["Normal"]),
     ]
     doc.build(story)
 
-    parsed = process_pdf_bytes(buf.getvalue(), filename="test_contract.pdf")
-    raw = parsed["raw_text"]
-    assert "[REDACTED_SSN]" in raw
-    assert "[REDACTED_EIN]" in raw
-    assert "[REDACTED_BANK_ACCT]" in raw
-    assert "123-45-6789" not in raw
-    assert "| Milestone | Amount | Due |" in raw
-    assert len(parsed["sections"]) >= 2
+    raw_text, sections = process_pdf_bytes(buf.getvalue())
+    assert "[REDACTED_SSN]" in raw_text
+    assert "123-45-6789" not in raw_text
+    assert "| Tier | Annual Fee | SLA |" in raw_text
+    assert "| Enterprise | $120,000 | 99.9% |" in raw_text
+    assert len(sections) >= 2
+    assert any(s["section_number"] == "1" for s in sections)
+    assert any(s["section_number"] == "2" for s in sections)

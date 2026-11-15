@@ -1,43 +1,54 @@
-"""Tests for Contextual RAG chunking, similarity query, and index deletion."""
+"""Tests for Contextual RAG chunking, similarity search, and contract index purging."""
 
-import sys
-from pathlib import Path
+from __future__ import annotations
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.services.rag_engine import RAGEngine, chunk_section
+from app.services.rag_engine import RAGEngine
 
 
-def test_chunk_section_sliding_window():
-    long_text = "Confidentiality obligation clause. " * 40  # > 1200 chars
-    chunks = chunk_section("4", "Confidentiality", long_text, page_number=2, chunk_size=600, overlap=100)
-    assert len(chunks) >= 2
-    assert all(c["text"].startswith("[Section 4: Confidentiality]") for c in chunks)
-
-
-def test_rag_index_query_and_purge(tmp_path):
-    engine = RAGEngine(persist_dir=str(tmp_path / "chroma"))
+def test_rag_chunking_overlap_and_metadata_prefix() -> None:
+    engine = RAGEngine()
+    long_text = " ".join(f"clauseword{i}" for i in range(250))
     sections = [
         {
-            "section_number": "3",
+            "section_number": "4.2",
+            "title": "Data Processing",
+            "text": long_text,
+            "page_number": 2,
+        }
+    ]
+    chunks = engine.chunk_sections(sections)
+    assert len(chunks) >= 2
+    assert chunks[0]["text"].startswith("[Section 4.2: Data Processing] ")
+    # Verify 100-char overlap continuity between consecutive chunks
+    body_0 = chunks[0]["text"].split("] ", 1)[1]
+    body_1 = chunks[1]["text"].split("] ", 1)[1]
+    assert body_0[-40:] in body_1 or body_1[:40] in body_0
+
+
+def test_rag_index_query_and_delete_purge() -> None:
+    engine = RAGEngine()
+    cid = "test-rag-contract-001"
+    sections = [
+        {
+            "section_number": "2",
             "title": "Indemnification",
-            "text": "Customer shall indemnify Provider from third-party intellectual property infringement claims.",
+            "text": "Seller provides uncapped indemnification for all intellectual property infringement claims.",
             "page_number": 1,
         },
         {
-            "section_number": "7",
-            "title": "Payment Terms",
-            "text": "Customer shall remit subscription fees Net 30 days from receipt of valid invoice.",
+            "section_number": "5",
+            "title": "Governing Law",
+            "text": "This Agreement is governed by the laws of the State of Delaware.",
             "page_number": 2,
         },
     ]
-    count = engine.index_contract("c-rag-1", sections)
+    count = engine.index_contract(cid, sections)
     assert count == 2
 
-    hits = engine.query_similar("c-rag-1", "indemnity intellectual property", n_results=2)
+    hits = engine.query_similar(cid, "uncapped indemnification IP claims", n_results=2)
     assert len(hits) >= 1
-    assert hits[0]["section_number"] == "3"
+    assert hits[0]["section_number"] == "2"
 
-    engine.delete_contract_index("c-rag-1")
-    after_purge = engine.query_similar("c-rag-1", "indemnity", n_results=2)
-    assert after_purge == []
+    engine.delete_contract_index(cid)
+    hits_after = engine.query_similar(cid, "uncapped indemnification", n_results=2)
+    assert hits_after == []

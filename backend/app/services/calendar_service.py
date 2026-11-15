@@ -1,26 +1,24 @@
-"""RFC 5545 iCalendar (.ics) Obligation Deadlines Sync Engine."""
+"""RFC 5545 iCalendar (.ics) generation engine for contractual obligation deadlines."""
 
 from __future__ import annotations
 
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 
 def _escape_ics(value: str) -> str:
-    return (
-        (value or "")
-        .replace("\\", "\\\\")
-        .replace(";", "\\;")
-        .replace(",", "\\,")
-        .replace("\r\n", "\\n")
-        .replace("\n", "\\n")
-    )
+    text = str(value or "")
+    text = text.replace("\\", "\\\\")
+    text = text.replace(";", "\\;")
+    text = text.replace(",", "\\,")
+    text = text.replace("\r\n", "\\n").replace("\n", "\\n")
+    return text
 
 
-def _fold_ics_line(line: str) -> str:
-    """Fold content lines at 75 octets per RFC 5545 Section 3.1."""
+def _fold_line(line: str) -> str:
+    """Fold RFC 5545 content lines to <= 75 octets."""
     if len(line) <= 75:
         return line
     parts = [line[:75]]
@@ -31,113 +29,99 @@ def _fold_ics_line(line: str) -> str:
     return "\r\n".join(parts)
 
 
-def _compute_deadline(trigger_text: str, offset_index: int) -> datetime:
-    """Compute a target UTC datetime from trigger wording such as '30 days' or explicit dates."""
-    now = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
-    text = (trigger_text or "").lower()
-
-    iso_match = re.search(r"\b(20\d{2})-(\d{2})-(\d{2})\b", text)
+def _infer_due_date(trigger: str, base_date: datetime) -> datetime:
+    text = (trigger or "").lower()
+    # Explicit ISO date YYYY-MM-DD
+    iso_match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
     if iso_match:
         try:
             return datetime(
                 int(iso_match.group(1)),
                 int(iso_match.group(2)),
                 int(iso_match.group(3)),
-                9,
-                0,
-                0,
                 tzinfo=timezone.utc,
             )
         except ValueError:
             pass
 
-    days_match = re.search(r"(\d+)\s*(?:calendar|business)?\s*days?", text)
-    if days_match:
-        days = max(1, min(365, int(days_match.group(1))))
-        return now + timedelta(days=days)
+    # Relative day counts e.g. "within 30 days", "net 45", "15 business days"
+    day_match = re.search(r"(\d+)\s*(?:calendar\s+|business\s+)?days?", text)
+    if day_match:
+        days = max(1, min(3650, int(day_match.group(1))))
+        return base_date + timedelta(days=days)
 
-    hours_match = re.search(r"(\d+)\s*hours?", text)
-    if hours_match:
-        hours = max(1, min(720, int(hours_match.group(1))))
-        return now + timedelta(hours=hours)
+    net_match = re.search(r"net\s*(\d+)", text)
+    if net_match:
+        return base_date + timedelta(days=int(net_match.group(1)))
 
-    if "annual" in text or "year" in text:
-        return now + timedelta(days=365)
-    if "quarter" in text:
-        return now + timedelta(days=90)
+    if "hour" in text:
+        return base_date + timedelta(days=1)
     if "month" in text:
-        return now + timedelta(days=30)
+        m_match = re.search(r"(\d+)\s*months?", text)
+        months = int(m_match.group(1)) if m_match else 1
+        return base_date + timedelta(days=30 * months)
+    if "annual" in text or "year" in text:
+        return base_date + timedelta(days=365)
 
-    return now + timedelta(days=14 + (offset_index * 7))
+    return base_date + timedelta(days=30)
 
 
 def generate_ics_calendar(contract: Any) -> str:
-    """Generate a valid RFC 5545 .ics calendar payload for extracted contract obligations."""
-    dtstamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    obligations: List[Dict[str, Any]] = list(getattr(contract, "obligations", []) or [])
+    """Build an RFC 5545 .ics calendar payload from a Contract's extracted obligations."""
+    now = datetime.now(timezone.utc)
+    dtstamp = now.strftime("%Y%m%dT%H%M%SZ")
+    base_date = getattr(contract, "created_at", None) or now
+    if base_date.tzinfo is None:
+        base_date = base_date.replace(tzinfo=timezone.utc)
 
-    if not obligations:
-        obligations = [
-            {
-                "clause_reference": "General",
-                "obligation_type": "Contract Review Milestone",
-                "obligor": "Legal Counsel",
-                "recipient": "Deal Stakeholders",
-                "description": f"Final execution and compliance verification for {contract.title}.",
-                "due_date_or_trigger": "14 days from review",
-                "recurrence": "One-time",
-                "penalty_for_breach": "Delayed deal closing",
-            }
-        ]
-
-    lines: List[str] = [
+    lines: list[str] = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//ContractMind v2.0//Legal Intelligence Studio//EN",
+        "PRODID:-//ContractMind v2.0//Legal Obligation Sync//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
-        f"X-WR-CALNAME:{_escape_ics(contract.title)} Obligations",
+        f"X-WR-CALNAME:{_escape_ics(getattr(contract, 'title', 'ContractMind Obligations'))}",
     ]
 
+    obligations = getattr(contract, "obligations", None) or []
     for idx, ob in enumerate(obligations):
-        category = str(ob.get("obligation_type", "Obligation"))
-        obligor = str(ob.get("obligor", "Party"))
-        recipient = str(ob.get("recipient", "Counterparty"))
-        trigger = str(ob.get("due_date_or_trigger", "Upon execution"))
-        recurrence = str(ob.get("recurrence", "One-time"))
-        penalty = str(ob.get("penalty_for_breach") or "Standard contractual remedies")
-        clause_ref = str(ob.get("clause_reference", "N/A"))
-        desc_body = str(ob.get("description", ""))
+        category = ob.get("obligation_type", "Contractual Duty")
+        obligor = ob.get("obligor", "Party")
+        recipient = ob.get("recipient", "Counterparty")
+        trigger = ob.get("due_date_or_trigger", "Upon Notice")
+        recurrence = ob.get("recurrence", "One-time")
+        penalty = ob.get("penalty_for_breach", "Contractual remedies")
+        clause_ref = ob.get("clause_reference", "General")
+        desc_body = ob.get("description", "")
 
-        start_dt = _compute_deadline(trigger, idx)
-        end_dt = start_dt + timedelta(hours=1)
+        due_dt = _infer_due_date(trigger, base_date + timedelta(days=idx))
+        dt_start = due_dt.strftime("%Y%m%d")
+        dt_end = (due_dt + timedelta(days=1)).strftime("%Y%m%d")
 
         summary = f"[ContractMind] {category} ({obligor}): {trigger}"
         description = (
-            f"Contract: {contract.title}\n"
-            f"Clause Citation: {clause_ref}\n"
+            f"Contract: {getattr(contract, 'title', 'Contract')}\n"
+            f"Clause Reference: {clause_ref}\n"
             f"Obligor: {obligor}\n"
             f"Recipient: {recipient}\n"
             f"Due Date / Trigger: {trigger}\n"
             f"Recurrence: {recurrence}\n"
-            f"Breach Penalty: {penalty}\n\n"
+            f"Penalty for Breach: {penalty}\n"
             f"Details: {desc_body}"
         )
 
-        uid = f"cm-{contract.id}-{idx}-{uuid.uuid4().hex[:8]}@contractmind.ai"
-        lines.extend(
-            [
-                "BEGIN:VEVENT",
-                f"UID:{uid}",
-                f"DTSTAMP:{dtstamp}",
-                f"DTSTART:{start_dt.strftime('%Y%m%dT%H%M%SZ')}",
-                f"DTEND:{end_dt.strftime('%Y%m%dT%H%M%SZ')}",
-                _fold_ics_line(f"SUMMARY:{_escape_ics(summary)}"),
-                _fold_ics_line(f"DESCRIPTION:{_escape_ics(description)}"),
-                "STATUS:CONFIRMED",
-                "END:VEVENT",
-            ]
-        )
+        event_lines = [
+            "BEGIN:VEVENT",
+            f"UID:{uuid.uuid4()}@contractmind.ai",
+            f"DTSTAMP:{dtstamp}",
+            f"DTSTART;VALUE=DATE:{dt_start}",
+            f"DTEND;VALUE=DATE:{dt_end}",
+            _fold_line(f"SUMMARY:{_escape_ics(summary)}"),
+            _fold_line(f"DESCRIPTION:{_escape_ics(description)}"),
+            "STATUS:CONFIRMED",
+            "END:VEVENT",
+        ]
+        lines.extend(event_lines)
 
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"

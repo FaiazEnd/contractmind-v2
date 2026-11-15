@@ -1,1 +1,1 @@
-"""Agent persona nodes package."""
+"""Agent nodes package."""

@@ -1,101 +1,56 @@
-"""Server-Sent Events (SSE) streaming endpoint for live StateGraph pipeline execution."""
+"""Server-Sent Events (SSE) streaming endpoint for live 4-agent StateGraph execution."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.graph import contract_graph
-from app.agents.state import ContractAgentState
+from app.api.deps import get_contract_or_404, run_pipeline_for_contract
 from app.database import get_db
-from app.models.audit import AuditLog
-from app.models.contract import Contract
 
-router = APIRouter()
+router = APIRouter(prefix="/stream", tags=["Streaming"])
 
 
 @router.get("/{contract_id}")
 async def stream_contract_analysis(contract_id: str, db: AsyncSession = Depends(get_db)) -> EventSourceResponse:
-    """Stream real-time node progress events while running the 4-agent StateGraph pipeline."""
-    res = await db.execute(select(Contract).where(Contract.id == contract_id))
-    contract = res.scalar_one_or_none()
-    if contract is None:
-        raise HTTPException(status_code=404, detail="Contract not found.")
+    """Stream real-time node progress events while executing the 4-agent StateGraph."""
+    contract = await get_contract_or_404(contract_id, db)
 
-    async def event_generator():
-        contract.status = "analyzing"
-        await db.commit()
+    async def event_generator() -> AsyncGenerator[dict[str, str], None]:
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
-        state: ContractAgentState = {
-            "contract_id": contract.id,
-            "title": contract.title,
-            "playbook_name": contract.playbook_name,
-            "raw_text": contract.raw_text,
-            "sections": list(contract.extracted_sections or []),
-            "identified_risks": [],
-            "debate_transcript": [],
-            "redlines": [],
-            "obligations": [],
-            "overall_risk_score": 0.0,
-            "risk_summary": {"critical": 0, "high": 0, "medium": 0, "low": 0},
-            "audit_events": [],
-        }
+        async def _emit(event: dict) -> None:
+            await queue.put(event)
 
-        yield {
-            "event": "stage",
-            "data": json.dumps({"node": "start", "status": "started", "contract_id": contract.id}),
-        }
-
-        final_state = state
-        async for node_name, updated_state in contract_graph.astream(state):
-            final_state = updated_state
-            yield {
-                "event": "stage",
-                "data": json.dumps(
+        async def _runner() -> None:
+            try:
+                await _emit({"node": "pipeline", "status": "started", "contract_id": contract_id})
+                updated = await run_pipeline_for_contract(contract, db, event_emitter=_emit)
+                await _emit(
                     {
-                        "node": node_name,
+                        "node": "pipeline",
                         "status": "completed",
-                        "risks_count": len(updated_state.get("identified_risks") or []),
-                        "redlines_count": len(updated_state.get("redlines") or []),
-                        "obligations_count": len(updated_state.get("obligations") or []),
-                        "overall_risk_score": updated_state.get("overall_risk_score", 0.0),
+                        "overall_risk_score": updated.overall_risk_score,
+                        "redline_count": len(updated.redlines or []),
+                        "obligation_count": len(updated.obligations or []),
                     }
-                ),
-            }
-
-        contract.identified_risks = list(final_state.get("identified_risks") or [])
-        contract.debate_transcript = list(final_state.get("debate_transcript") or [])
-        contract.redlines = list(final_state.get("redlines") or [])
-        contract.obligations = list(final_state.get("obligations") or [])
-        contract.overall_risk_score = float(final_state.get("overall_risk_score") or 0.0)
-        contract.risk_summary = dict(
-            final_state.get("risk_summary") or {"critical": 0, "high": 0, "medium": 0, "low": 0}
-        )
-        contract.status = "completed"
-
-        for evt in final_state.get("audit_events") or []:
-            db.add(
-                AuditLog(
-                    contract_id=contract.id,
-                    agent_name=str(evt["agent_name"]),
-                    action=str(evt["action"]),
-                    model_name=str(evt["model_name"]),
-                    prompt_tokens=int(evt["prompt_tokens"]),
-                    completion_tokens=int(evt["completion_tokens"]),
-                    total_tokens=int(evt["total_tokens"]),
-                    latency_ms=float(evt["latency_ms"]),
-                    estimated_cost_usd=float(evt["estimated_cost_usd"]),
                 )
-            )
-        await db.commit()
+            except Exception as exc:
+                await _emit({"node": "pipeline", "status": "error", "detail": str(exc)})
+            finally:
+                await queue.put(None)
 
-        yield {
-            "event": "complete",
-            "data": json.dumps({"contract_id": contract.id, "status": "completed"}),
-        }
+        task = asyncio.create_task(_runner())
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield {"event": "agent_update", "data": json.dumps(item)}
+        await task
 
     return EventSourceResponse(event_generator())

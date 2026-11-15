@@ -1,1 +1,1 @@
-"""ContractMind v2.0 FastAPI application package."""
+"""ContractMind v2.0 Backend Application Package."""

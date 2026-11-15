@@ -1,9 +1,10 @@
-"""Local 1-click launcher for ContractMind v2.0."""
+"""ContractMind v2.0 1-Click Launcher: configures directories, initializes DB, starts Uvicorn, opens browser."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import threading
 import time
@@ -12,28 +13,30 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT_DIR / "backend"
+LOG_FILE = BACKEND_DIR / "backend.log"
+
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+os.chdir(BACKEND_DIR)
 
-def _configure_logging() -> None:
-    log_path = BACKEND_DIR / "backend.log"
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.FileHandler(log_path, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("contractmind.launch")
 
 
-def _open_browser_delayed(url: str) -> None:
-    time.sleep(1.5)
+def _open_browser_when_ready() -> None:
+    time.sleep(1.8)
     try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+        webbrowser.open("http://localhost:8000")
+    except Exception as exc:
+        logger.warning("Could not open browser automatically: %s", exc)
 
 
 def main() -> None:
@@ -41,18 +44,17 @@ def main() -> None:
     from app.database import init_db
     import uvicorn
 
-    Path(settings.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)
-    Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
-    _configure_logging()
-
+    logger.info("Initializing ContractMind v2.0 (%s)", settings.DATABASE_URL)
     asyncio.run(init_db())
-    threading.Thread(target=_open_browser_delayed, args=("http://localhost:8000",), daemon=True).start()
 
+    if os.environ.get("CONTRACTMIND_NO_BROWSER") != "1":
+        threading.Thread(target=_open_browser_when_ready, daemon=True).start()
+
+    logger.info("Starting Uvicorn server on http://0.0.0.0:8000")
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=False,
+        port=int(os.environ.get("PORT", "8000")),
         log_level="info",
     )
 

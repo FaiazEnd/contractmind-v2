@@ -1,108 +1,108 @@
-"""Opposing Counsel Agent Node: defends vendor/counterparty leverage and commercial efficiency."""
+"""Opposing Counsel Agent Node: Counterparty negotiator defending commercial velocity and vendor leverage."""
 
 from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from app.agents.llm_client import llm_gateway
-from app.agents.state import ContractAgentState
+from app.agents.state import ContractGraphState
 
-COUNTERPARTY_DEFENSES: Dict[str, str] = {
-    "Uncapped Indemnification": (
-        "Counterparty accepts a balanced super-cap for third-party IP claims but rejects open-ended enterprise exposure "
-        "unrelated to Provider's core SaaS deliverables; prompt defense control is essential to manage litigation spend."
-    ),
-    "Consequential Damages Waiver Missing": (
-        "Standard commercial pricing assumes predictable unit economics; mutual exclusion of indirect/lost-profit damages "
-        "is market-standard provided Provider's fee-based liability ceiling remains intact."
-    ),
-    "AI Model Training on Proprietary Data": (
-        "Counterparty requires aggregated telemetry and anonymized operational diagnostics to maintain model reliability "
-        "and SLA uptime, though we can wall off raw proprietary Customer Data from shared foundation model weights."
-    ),
-    "Auto-Renewal Without Notice Trap": (
-        "Multi-quarter capacity reservation and dedicated cloud tenancy justify predictable renewal notice windows; "
-        "30-day non-renewal notice with automated reminder is acceptable if annual rate-lock protections apply."
-    ),
-    "Immediate Termination Without Cure Window": (
-        "Counterparty requires immediate suspension/termination rights strictly for severe AUP, security, or payment default "
-        "events, while accepting a 30-day cure period for ordinary operational breaches."
-    ),
-    "Unlimited Audit Rights": (
-        "Unrestricted on-site audits expose multi-tenant infrastructure to security and operational disruptions; "
-        "annual SOC 2 Type II / ISO 27001 certification delivery should serve as the primary audit mechanism."
-    ),
-    "Asymmetric Attorney Fee Shifting": (
-        "Fee recovery clauses deter frivolous non-payment disputes; converting to a mutual prevailing-party standard "
-        "preserves symmetry while maintaining collection discipline."
-    ),
-    "Non-Compete / Exclusivity Overbreadth": (
-        "Dedicated solution engineering investments warrant commercial commitment, though Counterparty agrees to drop "
-        "blanket exclusivity covenants in exchange for committed annual volume tiers."
-    ),
-    "Broad Data Exfiltration / Subprocessor Shield": (
-        "Modern cloud architectures rely on elastic hyperscaler subprocessors; advance 30-day email/portal notice is "
-        "workable provided Customer objection remedies are limited to good-faith mitigation or pro-rata termination."
-    ),
-    "Liquidated Damages Penalty Trap": (
-        "Committed enterprise discounts are amortized over the full subscription term; while 100% acceleration is waived "
-        "for Provider's uncured breach, termination for convenience should settle unpaid committed minimums."
-    ),
+
+_COUNTERPARTY_DEFENSES: dict[str, str] = {
+    "uncapped_indemnification": "Counterparty relies on standard IP and third-party bodily-injury carve-outs to align risk allocation with vendor pricing; we can negotiate a super-cap rather than a bare 1x limit.",
+    "consequential_damages_missing": "Maintaining direct-plus-foreseeable remedies protects recovery for willful misconduct or confidentiality breaches without opening speculative claims.",
+    "ai_model_training": "Vendor requires telemetry and anonymized pattern retention to preserve service quality and latency SLAs, though we can isolate raw Customer prompts from shared weights.",
+    "auto_renewal_trap": "Annual automatic renewals prevent abrupt service interruptions and lock in multi-year unit pricing discounts; a 45-to-60 day notice window balances operational planning.",
+    "immediate_termination_no_cure": "Immediate suspension rights are standard for security compromises, AUP violations, or non-payment where a 30-day wait amplifies platform risk.",
+    "unlimited_audit_rights": "Broad regulatory inspection rights reflect enterprise compliance expectations; limiting frequency to once annually except for security incidents is an acceptable middle ground.",
+    "asymmetric_fee_shifting": "Collection cost recovery deters strategic payment withholding on undisputed invoices; mutual prevailing-party language is acceptable for general litigation.",
+    "non_compete_overbreadth": "Exclusivity provisions underwrite dedicated engineering allocation and preferential pricing tiers; narrowing scope to named deliverables preserves commercial intent.",
+    "broad_subprocessor_shield": "Cloud-native delivery depends on elastic multi-region subprocessors; advance web-portal RSS notification satisfies transparency without operational bottlenecks.",
+    "liquidated_damages_trap": "Pre-agreed remedies establish predictable exit economics when dedicated capacity is reserved exclusively for Customer.",
 }
 
 
-async def opposing_node(state: ContractAgentState) -> ContractAgentState:
-    """Review flagged risks from counterparty counsel perspective."""
-    t0 = time.time()
-    risks: List[Dict[str, Any]] = list(state.get("identified_risks") or [])
-    transcript: List[Dict[str, Any]] = list(state.get("debate_transcript") or [])
-    audit_events: List[Dict[str, Any]] = list(state.get("audit_events") or [])
+async def opposing_node(state: ContractGraphState) -> ContractGraphState:
+    """Challenge Auditor findings from the counterparty commercial perspective."""
+    start = time.time()
+    risks = state.get("identified_risks") or []
+    transcript = list(state.get("debate_transcript") or [])
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-    for risk in risks:
-        cat = str(risk.get("category", ""))
-        defense = COUNTERPARTY_DEFENSES.get(
-            cat,
-            "Counterparty maintains that standard commercial allocation reflects negotiated enterprise pricing and SLA guarantees.",
-        )
-        transcript.append(
-            {
-                "turn_index": len(transcript) + 1,
-                "agent_name": "Opposing Counsel Agent",
-                "role": "Counterparty Commercial Negotiator",
-                "section_number": risk.get("section_number", "1"),
-                "risk_category": cat,
-                "argument": (
-                    f"Rebuttal on Section {risk.get('section_number')} ({cat}): {defense}"
-                ),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+    def _fallback_rebuttal() -> str:
+        if not risks:
+            return "Counterparty accepts the draft terms as balanced market-standard commercial language."
+        return (
+            f"Opposing Counsel pushes back on {len(risks)} proposed objections: vendor pricing assumes standard commercial risk allocation, "
+            "operational continuity carve-outs, and elastic cloud delivery. Propose calibrated middle-ground compromises rather than blanket deletions."
         )
 
-    llm_res = await llm_gateway.generate(
-        prompt=(
-            f"Provide counterparty commercial pushback position for {len(risks)} flagged clauses in "
-            f"'{state.get('title', 'Agreement')}'."
-        ),
-        system_instruction="You are Opposing Counsel defending commercial efficiency and vendor leverage.",
-        fallback_text=f"Opposing Counsel reviewed {len(risks)} flagged issues and submitted commercial counter-positions.",
+    prompt = (
+        f"Contract: {state.get('title', 'Agreement')}\n"
+        f"Respond as Counterparty Counsel to these enterprise objections: "
+        + "; ".join(f"{r['category']} (Section {r['section_number']})" for r in risks)
+    )
+    llm_resp = await llm_gateway.generate(
+        prompt=prompt,
+        system_prompt="You are Opposing Counsel representing the counterparty vendor. Defend commercial efficiency and propose pragmatic compromises in 2 sentences.",
+        fallback_fn=_fallback_rebuttal,
     )
 
-    latency_ms = round((time.time() - t0) * 1000.0, 2)
-    audit_events.append(
+    transcript.append(
         {
-            "agent_name": "Opposing Counsel Agent",
-            "action": "adversarial_counter_argument",
-            "model_name": llm_res.model_name,
-            "prompt_tokens": llm_res.prompt_tokens,
-            "completion_tokens": llm_res.completion_tokens,
-            "total_tokens": llm_res.total_tokens,
-            "latency_ms": max(latency_ms, llm_res.latency_ms),
-            "estimated_cost_usd": llm_res.estimated_cost_usd,
+            "agent": "Opposing Counsel",
+            "role": "Counterparty Negotiator",
+            "section_number": risks[0]["section_number"] if risks else "General",
+            "stance": "Commercial Leverage & Market Terms",
+            "message": llm_resp.text,
+            "timestamp": now_iso,
         }
     )
 
-    state["debate_transcript"] = transcript
-    state["audit_events"] = audit_events
-    return state
+    for risk in risks:
+        rebuttal = _COUNTERPARTY_DEFENSES.get(
+            risk.get("key", ""),
+            "Counterparty maintains this clause reflects standard commercial allocation and requests a balanced mutual compromise.",
+        )
+        transcript.append(
+            {
+                "agent": "Opposing Counsel",
+                "role": "Counterparty Negotiator",
+                "section_number": risk["section_number"],
+                "stance": "Counter-Proposal",
+                "message": f"[Re: {risk['category']}] {rebuttal}",
+                "timestamp": now_iso,
+            }
+        )
+
+    total_latency_ms = round((time.time() - start) * 1000.0, 2)
+    audit_records = list(state.get("audit_records") or [])
+    audit_records.append(
+        {
+            "agent_name": "Opposing Counsel",
+            "action": "counterparty_negotiation",
+            "model_name": llm_resp.model_name,
+            "prompt_tokens": llm_resp.prompt_tokens,
+            "completion_tokens": llm_resp.completion_tokens,
+            "total_tokens": llm_resp.total_tokens,
+            "latency_ms": max(total_latency_ms, llm_resp.latency_ms),
+            "estimated_cost_usd": llm_resp.estimated_cost_usd,
+        }
+    )
+
+    if state.get("event_emitter"):
+        await state["event_emitter"](
+            {
+                "node": "opposing_node",
+                "status": "completed",
+                "rebuttals": len(risks),
+            }
+        )
+
+    return {
+        **state,
+        "debate_transcript": transcript,
+        "audit_records": audit_records,
+    }
