@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.pytest_cache/
+*.db
+*.sqlite
+*.sqlite3
+backend/backend.log
+backend/chroma_db/
+backend/uploads/
+backend/.env
+.env
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+.vercel/
+
+# OS / Editors
+.DS_Store
+Thumbs.db

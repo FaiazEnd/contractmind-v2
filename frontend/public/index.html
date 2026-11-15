@@ -1,0 +1,1572 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ContractMind v2.0 | Autonomous Multi-Agent Legal Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <style>
+    :root {
+      --bg-canvas: #060913;
+      --bg-surface: #0d1323;
+      --accent: #6366f1;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      background: radial-gradient(circle at top right, #111936 0%, #060913 55%);
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    /* Visually hidden skip-link utility */
+    .visually-hidden:where(:not(:focus-within, :active)) {
+      position: absolute !important;
+      clip-path: inset(50%) !important;
+      overflow: hidden !important;
+      width: 1px !important;
+      height: 1px !important;
+      margin: -1px !important;
+      padding: 0 !important;
+      border: 0 !important;
+      white-space: nowrap !important;
+    }
+
+    :where(a:any-link, button, input, select, textarea):focus-visible {
+      outline: 2px solid #818cf8;
+      outline-offset: 2px;
+    }
+
+    /* Native modal dialog scroll containment per modern-web-guidance */
+    dialog {
+      color: #e2e8f0;
+      background: #0f172a;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 1rem;
+      padding: 0;
+      max-width: min(920px, 94vw);
+      max-height: 88vh;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.75);
+    }
+    dialog:modal {
+      overscroll-behavior: contain;
+    }
+    dialog::backdrop {
+      background: rgba(2, 6, 23, 0.78);
+      backdrop-filter: blur(6px);
+      overflow: hidden;
+      overscroll-behavior: contain;
+    }
+
+    /* Semantic tablist styling using border pseudo-element */
+    .studio-tablist {
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: none;
+      gap: 0.25rem;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    }
+    .studio-tablist::-webkit-scrollbar { display: none; }
+    .studio-tab {
+      position: relative;
+      flex: none;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #94a3b8;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: color 0.15s ease;
+    }
+    .studio-tab:hover { color: #e2e8f0; }
+    .studio-tab[aria-selected="true"] {
+      color: #a5b4fc;
+    }
+    .studio-tab[aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      border-block-end: 3px solid #6366f1;
+    }
+
+    /* Word-level diff tokens */
+    .diff-del {
+      background-color: rgba(244, 63, 94, 0.22);
+      color: #fda4af;
+      text-decoration: line-through;
+      padding: 0.05rem 0.25rem;
+      border-radius: 0.25rem;
+    }
+    .diff-ins {
+      background-color: rgba(16, 185, 129, 0.22);
+      color: #6ee7b7;
+      text-decoration: underline;
+      text-decoration-color: rgba(52, 211, 153, 0.7);
+      padding: 0.05rem 0.25rem;
+      border-radius: 0.25rem;
+    }
+
+    /* Responsive sticky table per modern-web-guidance */
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: min(560px, 68vh);
+      container-type: inline-size;
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 0.75rem;
+      background: rgba(15, 23, 42, 0.65);
+    }
+    .obligations-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 0.84rem;
+    }
+    .obligations-table thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: #131c31;
+    }
+    .obligations-table th,
+    .obligations-table td {
+      padding: 0.75rem 0.9rem;
+      text-align: left;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+      vertical-align: top;
+    }
+    @container (width < 680px) {
+      .obligations-table,
+      .obligations-table thead,
+      .obligations-table tbody,
+      .obligations-table tr,
+      .obligations-table th,
+      .obligations-table td {
+        display: block;
+      }
+      .obligations-table thead {
+        display: none;
+      }
+      .obligations-table tr {
+        margin-block-end: 0.9rem;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 0.65rem;
+        padding: 0.5rem;
+        background: rgba(15, 23, 42, 0.9);
+      }
+      .obligations-table td::before {
+        content: attr(data-label) ": ";
+        font-weight: 700;
+        color: #94a3b8;
+      }
+    }
+
+    /* Guided Tour Halo Spotlight & Popover */
+    .tour-spotlight-active {
+      position: relative !important;
+      z-index: 60 !important;
+      border-radius: 0.75rem;
+      box-shadow:
+        0 0 0 3px #818cf8,
+        0 0 28px 6px rgba(99, 102, 241, 0.85),
+        0 0 0 9999px rgba(2, 6, 23, 0.72) !important;
+      transition: box-shadow 0.25s ease;
+    }
+
+    [popover]:is(:popover-open, .\:popover-open) {
+      display: block;
+    }
+    #tour-popover {
+      position: fixed;
+      z-index: 80;
+      max-width: 390px;
+      margin: 0;
+      padding: 1.15rem;
+      border-radius: 1rem;
+      border: 1px solid rgba(129, 140, 248, 0.6);
+      background: linear-gradient(145deg, #111936, #0b1120);
+      color: #f8fafc;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.75), 0 0 24px rgba(99, 102, 241, 0.35);
+    }
+  </style>
+</head>
+<body x-data="contractMindApp()" x-init="init()" @keydown.escape.window="handleEscape()">
+  <a href="#studio-title" class="visually-hidden bg-indigo-600 text-white px-4 py-2 rounded font-semibold top-2 left-2 z-50">
+    Skip to main workspace
+  </a>
+
+  <!-- Top Navigation Bar -->
+  <header class="sticky top-0 z-30 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-md">
+    <div class="max-w-[1680px] mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/25">
+          <i class="fa-solid fa-scale-balanced text-white text-lg" aria-hidden="true"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-extrabold tracking-tight text-lg text-white">ContractMind</span>
+            <span class="text-[11px] font-mono uppercase px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">v2.0 Studio</span>
+          </div>
+          <p class="text-xs text-slate-400">Autonomous Multi-Agent Legal Intelligence &amp; Deal Room</p>
+        </div>
+      </div>
+
+      <nav aria-label="Primary Studio Controls" class="flex flex-wrap items-center gap-2">
+        <button
+          id="tour-llm-engine"
+          type="button"
+          @click="openSettingsDialog()"
+          class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-900 border border-slate-700 hover:border-indigo-400 text-slate-200 transition"
+        >
+          <span class="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true"></span>
+          <span>Engine: <span class="font-mono text-indigo-300" x-text="llmStatus.default_provider.toUpperCase()"></span></span>
+        </button>
+
+        <button
+          type="button"
+          @click="openSettingsDialog()"
+          class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono bg-slate-900 border border-slate-700 hover:border-cyan-400 text-slate-300 transition"
+          title="Open Telemetry & LLM Config"
+        >
+          <i class="fa-solid fa-microchip text-cyan-400" aria-hidden="true"></i>
+          <span x-text="telemetry.total_tokens + ' tok'"></span>
+          <span class="text-slate-600">|</span>
+          <span class="text-emerald-400" x-text="'$' + Number(telemetry.total_estimated_cost_usd || 0).toFixed(5)"></span>
+        </button>
+
+        <button
+          id="tour-deal-room-btn"
+          type="button"
+          @click="openDealRoomModal()"
+          class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/35 hover:bg-amber-500/25 transition"
+        >
+          <i class="fa-solid fa-building-shield" aria-hidden="true"></i>
+          <span>Deal Room Audit</span>
+        </button>
+
+        <button
+          type="button"
+          @click="startTour()"
+          class="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/25 transition"
+        >
+          <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+          <span>7-Step Tour</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Main Workspace Layout -->
+  <div class="max-w-[1680px] mx-auto px-4 py-5 grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+    <!-- Left Sidebar: Ingestion & Repository -->
+    <aside aria-label="Contract Repository and Ingestion" class="lg:col-span-3 space-y-4">
+      <section id="tour-ingestion-panel" class="rounded-2xl bg-slate-900/80 border border-slate-800 p-4 shadow-xl space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-bold text-white uppercase tracking-wider">Ingest Agreement</h2>
+          <span class="text-[11px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/25">PII Guard ON</span>
+        </div>
+
+        <div>
+          <label for="playbook-select" class="block text-xs font-medium text-slate-400 mb-1">Corporate Playbook</label>
+          <select
+            id="playbook-select"
+            x-model="selectedPlaybook"
+            class="w-full rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-200 px-3 py-2"
+          >
+            <template x-for="pb in playbooks" :key="pb.id">
+              <option :value="pb.name" x-text="pb.name"></option>
+            </template>
+          </select>
+        </div>
+
+        <label
+          for="contract-file-input"
+          class="flex flex-col items-center justify-center border-2 border-dashed border-slate-700 hover:border-indigo-400 rounded-xl p-4 cursor-pointer bg-slate-950/60 transition text-center"
+        >
+          <i class="fa-solid fa-file-arrow-up text-2xl text-indigo-400 mb-2" aria-hidden="true"></i>
+          <span class="text-xs font-semibold text-slate-200">Upload PDF / TXT Contract</span>
+          <span class="text-[11px] text-slate-500 mt-0.5">PyMuPDF table extraction + PII redaction</span>
+          <input
+            id="contract-file-input"
+            type="file"
+            accept=".pdf,.txt,.md"
+            class="sr-only"
+            @change="uploadContract($event)"
+          />
+        </label>
+
+        <div>
+          <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-2">Instant Benchmark Corpus</p>
+          <div class="grid grid-cols-3 gap-1.5">
+            <template x-for="sample in demoSamples" :key="sample.key">
+              <button
+                type="button"
+                @click="loadDemo(sample.key)"
+                :disabled="loading"
+                class="px-2 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 hover:border-indigo-400 text-slate-200 transition disabled:opacity-50"
+                x-text="sample.label"
+              ></button>
+            </template>
+          </div>
+        </div>
+      </section>
+
+      <!-- Repository List -->
+      <section class="rounded-2xl bg-slate-900/80 border border-slate-800 p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-bold text-white uppercase tracking-wider">Deal Repository</h2>
+          <span class="text-xs font-mono text-slate-400" x-text="contracts.length + ' docs'"></span>
+        </div>
+
+        <div x-show="contracts.length === 0" class="text-xs text-slate-500 py-6 text-center">
+          No agreements loaded yet. Select a benchmark sample or upload a PDF.
+        </div>
+
+        <ul class="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+          <template x-for="c in contracts" :key="c.id">
+            <li
+              class="rounded-xl border p-3 transition cursor-pointer"
+              :class="activeContract && activeContract.id === c.id ? 'bg-indigo-950/50 border-indigo-500/70' : 'bg-slate-950/60 border-slate-800 hover:border-slate-600'"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <button
+                  type="button"
+                  @click="selectContract(c.id)"
+                  class="text-left flex-1 min-w-0"
+                >
+                  <p class="text-xs font-bold text-slate-100 truncate" x-text="c.title"></p>
+                  <div class="flex items-center gap-2 mt-1.5">
+                    <span
+                      class="text-[10px] font-mono px-1.5 py-0.5 rounded font-semibold"
+                      :class="c.overall_risk_score >= 75 ? 'bg-rose-500/20 text-rose-300' : c.overall_risk_score >= 50 ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'"
+                      x-text="'Risk ' + c.overall_risk_score"
+                    ></span>
+                    <span class="text-[10px] text-slate-400 uppercase font-mono" x-text="c.status"></span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  @click.stop="deleteContract(c.id)"
+                  :aria-label="'Delete ' + c.title"
+                  class="text-slate-500 hover:text-rose-400 p-1 rounded"
+                >
+                  <i class="fa-solid fa-trash-can text-xs" aria-hidden="true"></i>
+                </button>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </section>
+    </aside>
+
+    <!-- Main Studio Canvas -->
+    <main id="main-workspace" class="lg:col-span-9 space-y-4">
+      <!-- Live Pipeline Status Banner -->
+      <div
+        x-show="loading || sseStage"
+        x-transition
+        role="status"
+        aria-live="polite"
+        class="rounded-xl bg-indigo-950/70 border border-indigo-500/50 px-4 py-3 flex items-center justify-between gap-3"
+      >
+        <div class="flex items-center gap-3">
+          <i class="fa-solid fa-circle-notch fa-spin text-indigo-400" aria-hidden="true"></i>
+          <span class="text-xs font-semibold text-indigo-100" x-text="sseStage || 'Running Multi-Agent StateGraph Pipeline...'"></span>
+        </div>
+        <span class="text-[11px] font-mono text-indigo-300">Auditor → Opposing → Arbiter → Obligations</span>
+      </div>
+
+      <!-- Empty State -->
+      <section x-show="!activeContract" class="rounded-2xl bg-slate-900/70 border border-slate-800 p-10 text-center space-y-4">
+        <div class="mx-auto h-16 w-16 rounded-2xl bg-indigo-500/15 border border-indigo-400/30 flex items-center justify-center">
+          <i class="fa-solid fa-gavel text-2xl text-indigo-400" aria-hidden="true"></i>
+        </div>
+        <h1 id="studio-title" tabindex="-1" class="text-2xl font-extrabold text-white">Neo-Legal Studio v2.0</h1>
+        <p class="text-sm text-slate-400 max-w-xl mx-auto">
+          Upload a commercial contract or load a benchmark agreement from the left panel to launch adversarial multi-agent debate, consensus redlining, Word Track Changes export, and Deal Room conflict audits.
+        </p>
+        <div class="flex flex-wrap justify-center gap-2 pt-2">
+          <button
+            type="button"
+            @click="loadDemo('msa')"
+            class="px-4 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition"
+          >
+            Load &amp; Analyze Enterprise MSA
+          </button>
+          <button
+            type="button"
+            @click="loadDemo('cloud_dpa')"
+            class="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+          >
+            Load Cloud DPA
+          </button>
+        </div>
+      </section>
+
+      <!-- Active Contract Studio -->
+      <template x-if="activeContract">
+        <div class="space-y-4">
+          <!-- Contract Header & Action Bar -->
+          <section id="tour-action-bar" class="rounded-2xl bg-slate-900/85 border border-slate-800 p-5 shadow-xl space-y-4">
+            <div class="flex flex-wrap items-start justify-between gap-4">
+              <div class="space-y-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-[11px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700" x-text="activeContract.playbook_name"></span>
+                  <span class="text-[11px] font-mono text-slate-400" x-text="activeContract.original_filename"></span>
+                </div>
+                <h1 id="studio-title" tabindex="-1" class="text-xl font-extrabold text-white" x-text="activeContract.title"></h1>
+              </div>
+
+              <!-- Risk Gauge Pill -->
+              <div class="flex items-center gap-3 bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2.5">
+                <div>
+                  <p class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Composite Risk</p>
+                  <p class="text-2xl font-black font-mono"
+                     :class="activeContract.overall_risk_score >= 75 ? 'text-rose-400' : activeContract.overall_risk_score >= 50 ? 'text-amber-400' : 'text-emerald-400'"
+                     x-text="activeContract.overall_risk_score + '/100'"></p>
+                </div>
+                <div class="grid grid-cols-2 gap-1 text-[10px] font-mono">
+                  <span class="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300" x-text="'C:' + (activeContract.risk_summary?.critical || 0)"></span>
+                  <span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300" x-text="'H:' + (activeContract.risk_summary?.high || 0)"></span>
+                  <span class="px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-300" x-text="'M:' + (activeContract.risk_summary?.medium || 0)"></span>
+                  <span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300" x-text="'L:' + (activeContract.risk_summary?.low || 0)"></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-800/80">
+              <button
+                type="button"
+                @click="streamAnalysis(activeContract.id)"
+                class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition"
+              >
+                <i class="fa-solid fa-play" aria-hidden="true"></i>
+                <span>Re-Run Agent Pipeline</span>
+              </button>
+
+              <a
+                :href="'/api/v1/analysis/' + activeContract.id + '/export/docx'"
+                class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition"
+              >
+                <i class="fa-solid fa-file-word text-sky-400" aria-hidden="true"></i>
+                <span>Export Track Changes (.DOCX)</span>
+              </a>
+
+              <a
+                :href="'/api/v1/analysis/' + activeContract.id + '/export/clean'"
+                class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 transition"
+              >
+                <i class="fa-solid fa-file-signature" aria-hidden="true"></i>
+                <span>Clean Copy (.DOCX)</span>
+              </a>
+
+              <a
+                :href="'/api/v1/analysis/' + activeContract.id + '/export/calendar'"
+                class="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition"
+              >
+                <i class="fa-solid fa-calendar-check text-amber-400" aria-hidden="true"></i>
+                <span>Sync Calendar (.ICS)</span>
+              </a>
+
+              <button
+                id="tour-copilot-btn"
+                type="button"
+                @click="copilotOpen = !copilotOpen"
+                :aria-expanded="copilotOpen"
+                class="ml-auto inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-400/40 transition"
+              >
+                <i class="fa-solid fa-comments" aria-hidden="true"></i>
+                <span>Ask Copilot</span>
+              </button>
+            </div>
+          </section>
+
+          <!-- Studio Tablist -->
+          <section class="rounded-2xl bg-slate-900/85 border border-slate-800 shadow-xl overflow-hidden">
+            <div
+              role="tablist"
+              aria-label="Contract Studio Views"
+              class="studio-tablist px-4 bg-slate-950/50"
+              @keydown="handleTabKeydown($event)"
+            >
+              <button type="button" role="tab" id="tab-redlines" :aria-selected="activeTab === 'redlines'" :tabindex="activeTab === 'redlines' ? 0 : -1" @click="switchTab('redlines')" class="studio-tab">
+                <i class="fa-solid fa-pen-to-square mr-1.5" aria-hidden="true"></i>Consensus Redlines (<span x-text="(activeContract.redlines || []).length"></span>)
+              </button>
+              <button type="button" role="tab" id="tab-dual" :aria-selected="activeTab === 'dual'" :tabindex="activeTab === 'dual' ? 0 : -1" @click="switchTab('dual')" class="studio-tab">
+                <i class="fa-solid fa-columns mr-1.5" aria-hidden="true"></i>Side-by-Side Canvas
+              </button>
+              <button type="button" role="tab" id="tab-playbook" :aria-selected="activeTab === 'playbook'" :tabindex="activeTab === 'playbook' ? 0 : -1" @click="switchTab('playbook')" class="studio-tab">
+                <i class="fa-solid fa-clipboard-check mr-1.5" aria-hidden="true"></i>Playbook Compliance
+              </button>
+              <button type="button" role="tab" id="tab-debate" :aria-selected="activeTab === 'debate'" :tabindex="activeTab === 'debate' ? 0 : -1" @click="switchTab('debate')" class="studio-tab">
+                <i class="fa-solid fa-people-arrows mr-1.5" aria-hidden="true"></i>Debate Transcript (<span x-text="(activeContract.debate_transcript || []).length"></span>)
+              </button>
+              <button type="button" role="tab" id="tab-obligations" :aria-selected="activeTab === 'obligations'" :tabindex="activeTab === 'obligations' ? 0 : -1" @click="switchTab('obligations')" class="studio-tab">
+                <i class="fa-solid fa-list-check mr-1.5" aria-hidden="true"></i>Obligations Matrix (<span x-text="(activeContract.obligations || []).length"></span>)
+              </button>
+            </div>
+
+            <!-- TAB 1: Consensus Redlines -->
+            <div role="tabpanel" aria-labelledby="tab-redlines" :hidden="activeTab !== 'redlines'" :tabindex="activeTab === 'redlines' ? 0 : null" class="p-5 space-y-4">
+              <!-- Risk & Decision Filter Toolbar -->
+              <div id="tour-redlines-toolbar" class="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400 mr-1">Risk:</span>
+                  <template x-for="sev in ['ALL', 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW']" :key="sev">
+                    <button
+                      type="button"
+                      @click="riskFilter = sev"
+                      class="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition"
+                      :class="riskFilter === sev ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-slate-500'"
+                    >
+                      <span x-text="sev"></span>
+                      <span class="ml-1 font-mono opacity-80" x-text="countBySeverity(sev)"></span>
+                    </button>
+                  </template>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="text-[11px] font-semibold uppercase text-slate-400 mr-1">Decision:</span>
+                  <template x-for="dec in ['ALL', 'PENDING', 'ACCEPTED', 'REJECTED']" :key="dec">
+                    <button
+                      type="button"
+                      @click="decisionFilter = dec"
+                      class="px-2.5 py-1 rounded-lg text-[11px] font-bold border transition"
+                      :class="decisionFilter === dec ? 'bg-cyan-600 text-white border-cyan-400' : 'bg-slate-900 text-slate-300 border-slate-700 hover:border-slate-500'"
+                    >
+                      <span x-text="dec"></span>
+                      <span class="ml-1 font-mono opacity-80" x-text="countByDecision(dec)"></span>
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+              <p class="text-xs font-mono text-slate-400" x-text="'Showing ' + filteredRedlines().length + ' of ' + (activeContract.redlines || []).length + ' redlines • Filtered by ' + riskFilter + ' risk (' + decisionFilter + ')'"></p>
+
+              <!-- Empty State Recovery -->
+              <div x-show="filteredRedlines().length === 0" class="rounded-xl border border-dashed border-slate-700 bg-slate-950/50 p-8 text-center space-y-3">
+                <p class="text-sm font-semibold text-slate-300">No redlines match the current risk/decision filter.</p>
+                <button
+                  type="button"
+                  @click="riskFilter = 'ALL'; decisionFilter = 'ALL'"
+                  class="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white"
+                >
+                  Show All Redlines
+                </button>
+              </div>
+
+              <!-- Redline Cards -->
+              <div class="space-y-4">
+                <template x-for="rl in filteredRedlines()" :key="rl.id">
+                  <article class="rounded-xl border border-slate-800 bg-slate-950/75 p-4 space-y-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div class="flex items-center gap-2">
+                        <span class="font-mono text-xs font-bold text-indigo-300 bg-indigo-500/15 px-2.5 py-1 rounded-md border border-indigo-500/30" x-text="'Section ' + rl.section_number"></span>
+                        <span
+                          class="text-[11px] font-bold px-2 py-0.5 rounded uppercase"
+                          :class="rl.risk_severity === 'CRITICAL' ? 'bg-rose-500/20 text-rose-300' : rl.risk_severity === 'HIGH' ? 'bg-amber-500/20 text-amber-300' : 'bg-yellow-500/20 text-yellow-300'"
+                          x-text="rl.risk_severity"
+                        ></span>
+                        <span
+                          class="text-[11px] font-mono px-2 py-0.5 rounded border"
+                          :class="rl.accepted === true ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : rl.accepted === false ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : 'bg-slate-800 text-slate-300 border-slate-700'"
+                          x-text="rl.accepted === true ? 'ACCEPTED' : rl.accepted === false ? 'REJECTED' : 'PENDING'"
+                        ></span>
+                      </div>
+
+                      <div class="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          @click="decideRedline(rl.id, true)"
+                          class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/40 transition"
+                        >
+                          <i class="fa-solid fa-check mr-1" aria-hidden="true"></i>Accept
+                        </button>
+                        <button
+                          type="button"
+                          @click="decideRedline(rl.id, false)"
+                          class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/40 transition"
+                        >
+                          <i class="fa-solid fa-xmark mr-1" aria-hidden="true"></i>Reject
+                        </button>
+                        <button
+                          type="button"
+                          @click="decideRedline(rl.id, null)"
+                          class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+
+                    <p class="text-xs text-slate-400" x-text="rl.legal_rationale"></p>
+
+                    <!-- Word-level diff preview -->
+                    <div class="rounded-lg bg-slate-900/90 border border-slate-800 p-3.5 text-sm leading-relaxed font-mono">
+                      <template x-for="(tok, tIdx) in (rl.diff_tokens || [])" :key="tIdx">
+                        <span
+                          :class="tok.type === 'del' ? 'diff-del' : tok.type === 'ins' ? 'diff-ins' : 'text-slate-200'"
+                          x-text="tok.text"
+                        ></span>
+                      </template>
+                    </div>
+
+                    <!-- AI Prompt Rewriter -->
+                    <div class="flex flex-wrap items-center gap-2 pt-1">
+                      <label :for="'prompt-' + rl.id" class="visually-hidden">Custom rewrite prompt for Section <span x-text="rl.section_number"></span></label>
+                      <input
+                        :id="'prompt-' + rl.id"
+                        type="text"
+                        x-model="promptDrafts[rl.id]"
+                        placeholder="AI Rewrite instruction (e.g. 'Cap liability at 6 months fees and make indemnity mutual')"
+                        class="flex-1 min-w-[240px] rounded-lg bg-slate-900 border border-slate-700 px-3 py-1.5 text-xs text-slate-100 placeholder-slate-500"
+                      />
+                      <button
+                        type="button"
+                        @click="regenerateRedline(rl.id)"
+                        :disabled="regeneratingId === rl.id"
+                        class="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600/25 hover:bg-indigo-600/45 text-indigo-200 border border-indigo-500/40 transition disabled:opacity-50"
+                      >
+                        <i class="fa-solid fa-wand-sparkles mr-1" aria-hidden="true"></i>
+                        <span x-text="regeneratingId === rl.id ? 'Rewriting...' : 'Regenerate Redline'"></span>
+                      </button>
+                    </div>
+                  </article>
+                </template>
+              </div>
+            </div>
+
+            <!-- TAB 2: Side-by-Side Synchronized Dual-Pane Canvas -->
+            <div id="tour-dual-pane" role="tabpanel" aria-labelledby="tab-dual" :hidden="activeTab !== 'dual'" :tabindex="activeTab === 'dual' ? 0 : null" class="p-5 space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="flex items-center gap-4 text-xs">
+                  <span class="inline-flex items-center gap-1.5 text-emerald-300"><span class="h-2.5 w-2.5 rounded-full bg-emerald-400"></span> Proposed Insertion</span>
+                  <span class="inline-flex items-center gap-1.5 text-rose-300"><span class="h-2.5 w-2.5 rounded-full bg-rose-400"></span> Proposed Deletion</span>
+                </div>
+                <label class="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input type="checkbox" x-model="syncScroll" class="rounded border-slate-600 bg-slate-900 text-indigo-500" />
+                  <span>Synchronized Dual-Pane Scroll</span>
+                </label>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/75 overflow-hidden">
+                  <div class="px-4 py-2.5 bg-slate-900 border-b border-slate-800 text-xs font-bold uppercase tracking-wider text-slate-300">
+                    Original Ingested Draft
+                  </div>
+                  <div
+                    x-ref="leftPane"
+                    @scroll="onPaneScroll('left')"
+                    class="p-4 h-[520px] overflow-y-auto space-y-4 text-sm leading-relaxed"
+                  >
+                    <template x-for="sec in (activeContract.extracted_sections || [])" :key="'orig-' + sec.section_number">
+                      <div class="border-b border-slate-800/70 pb-3">
+                        <h3 class="font-bold text-indigo-300 text-xs uppercase tracking-wide mb-1" x-text="'Section ' + sec.section_number + ': ' + sec.title"></h3>
+                        <p class="text-slate-300 whitespace-pre-line text-xs" x-text="sec.text"></p>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <div class="rounded-xl border border-slate-800 bg-slate-950/75 overflow-hidden">
+                  <div class="px-4 py-2.5 bg-slate-900 border-b border-slate-800 text-xs font-bold uppercase tracking-wider text-emerald-300">
+                    Consensus Redline Working Draft
+                  </div>
+                  <div
+                    x-ref="rightPane"
+                    @scroll="onPaneScroll('right')"
+                    class="p-4 h-[520px] overflow-y-auto space-y-4 text-sm leading-relaxed"
+                  >
+                    <template x-for="sec in (activeContract.extracted_sections || [])" :key="'red-' + sec.section_number">
+                      <div class="border-b border-slate-800/70 pb-3">
+                        <h3 class="font-bold text-emerald-300 text-xs uppercase tracking-wide mb-1" x-text="'Section ' + sec.section_number + ': ' + sec.title"></h3>
+                        <template x-if="redlinesForSection(sec.section_number).length > 0">
+                          <div class="space-y-2">
+                            <template x-for="rl in redlinesForSection(sec.section_number)" :key="'pane-rl-' + rl.id">
+                              <div class="text-xs font-mono leading-relaxed">
+                                <template x-if="rl.accepted === false">
+                                  <p class="text-slate-400" x-text="rl.original_text + ' [Redline Rejected]'"></p>
+                                </template>
+                                <template x-if="rl.accepted !== false">
+                                  <div>
+                                    <template x-for="(tok, i) in (rl.diff_tokens || [])" :key="i">
+                                      <span :class="tok.type === 'del' ? 'diff-del' : tok.type === 'ins' ? 'diff-ins' : 'text-slate-200'" x-text="tok.text"></span>
+                                    </template>
+                                  </div>
+                                </template>
+                              </div>
+                            </template>
+                          </div>
+                        </template>
+                        <template x-if="redlinesForSection(sec.section_number).length === 0">
+                          <p class="text-slate-300 whitespace-pre-line text-xs" x-text="sec.text"></p>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- TAB 3: Playbook Compliance -->
+            <div id="tour-playbook-pane" role="tabpanel" aria-labelledby="tab-playbook" :hidden="activeTab !== 'playbook'" :tabindex="activeTab === 'playbook' ? 0 : null" class="p-5 space-y-4">
+              <template x-if="playbookReport">
+                <div class="space-y-4">
+                  <div class="rounded-xl bg-slate-950/80 border border-slate-800 p-4 flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                      <p class="text-xs text-slate-400 uppercase font-semibold">Playbook Adherence Score</p>
+                      <div class="flex items-center gap-3 mt-1">
+                        <span class="text-3xl font-black font-mono text-white" x-text="playbookReport.adherence_score + '%'"></span>
+                        <span
+                          class="px-3 py-1 rounded-full text-xs font-bold"
+                          :class="playbookReport.verdict === 'STRONG COMPLIANCE' ? 'bg-emerald-500/20 text-emerald-300' : playbookReport.verdict === 'ACCEPTABLE WITH REDLINES' ? 'bg-amber-500/20 text-amber-300' : 'bg-rose-500/20 text-rose-300'"
+                          x-text="playbookReport.verdict"
+                        ></span>
+                      </div>
+                    </div>
+                    <div class="flex gap-3 text-xs font-mono">
+                      <span class="px-2.5 py-1 rounded bg-emerald-500/15 text-emerald-300" x-text="'Compliant: ' + playbookReport.compliant_count"></span>
+                      <span class="px-2.5 py-1 rounded bg-cyan-500/15 text-cyan-300" x-text="'Remediated: ' + playbookReport.remediated_count"></span>
+                      <span class="px-2.5 py-1 rounded bg-rose-500/15 text-rose-300" x-text="'Violations: ' + playbookReport.non_compliant_count"></span>
+                    </div>
+                  </div>
+
+                  <div class="space-y-2.5">
+                    <template x-for="chk in playbookReport.rule_checks" :key="chk.category">
+                      <div class="rounded-xl border border-slate-800 bg-slate-950/60 p-3.5 space-y-1.5">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                          <span class="text-sm font-bold text-white" x-text="chk.category"></span>
+                          <span
+                            class="text-[11px] font-mono font-bold px-2 py-0.5 rounded"
+                            :class="chk.status === 'COMPLIANT' ? 'bg-emerald-500/20 text-emerald-300' : chk.status === 'REMEDIATED_BY_REDLINE' ? 'bg-cyan-500/20 text-cyan-300' : 'bg-rose-500/20 text-rose-300'"
+                            x-text="chk.status"
+                          ></span>
+                        </div>
+                        <p class="text-xs text-slate-300" x-text="chk.finding"></p>
+                        <p class="text-[11px] text-slate-500" x-text="'Preferred Fallback: ' + chk.preferred_fallback"></p>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- TAB 4: Multi-Agent Debate Transcript -->
+            <div role="tabpanel" aria-labelledby="tab-debate" :hidden="activeTab !== 'debate'" :tabindex="activeTab === 'debate' ? 0 : null" class="p-5 space-y-3">
+              <template x-for="turn in (activeContract.debate_transcript || [])" :key="turn.turn_index">
+                <div class="rounded-xl border border-slate-800 bg-slate-950/70 p-4 space-y-1.5">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="text-xs font-bold px-2.5 py-0.5 rounded-full"
+                        :class="turn.agent_name.includes('Auditor') ? 'bg-rose-500/20 text-rose-300' : turn.agent_name.includes('Opposing') ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'"
+                        x-text="turn.agent_name"
+                      ></span>
+                      <span class="text-xs text-slate-400" x-text="turn.role"></span>
+                    </div>
+                    <span class="text-[11px] font-mono text-indigo-300" x-text="'Section ' + turn.section_number + ' • ' + turn.risk_category"></span>
+                  </div>
+                  <p class="text-xs text-slate-200 leading-relaxed" x-text="turn.argument"></p>
+                </div>
+              </template>
+            </div>
+
+            <!-- TAB 5: Obligations Matrix -->
+            <div role="tabpanel" aria-labelledby="tab-obligations" :hidden="activeTab !== 'obligations'" :tabindex="activeTab === 'obligations' ? 0 : null" class="p-5">
+              <div tabindex="0" role="region" aria-labelledby="obligations-caption" class="table-wrapper">
+                <table class="obligations-table">
+                  <caption id="obligations-caption" class="visually-hidden">Extracted contractual obligations matrix</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Citation</th>
+                      <th scope="col">Category</th>
+                      <th scope="col">Obligor → Recipient</th>
+                      <th scope="col">Operational Duty</th>
+                      <th scope="col">Trigger / Deadline</th>
+                      <th scope="col">Breach Penalty</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(ob, oIdx) in (activeContract.obligations || [])" :key="oIdx">
+                      <tr class="hover:bg-slate-900/60">
+                        <td data-label="Citation" class="font-mono text-xs text-indigo-300" x-text="ob.clause_reference"></td>
+                        <td data-label="Category" class="font-semibold text-white text-xs" x-text="ob.obligation_type"></td>
+                        <td data-label="Parties" class="text-xs text-slate-300" x-text="ob.obligor + ' → ' + ob.recipient"></td>
+                        <td data-label="Duty" class="text-xs text-slate-300 max-w-xs" x-text="ob.description"></td>
+                        <td data-label="Trigger" class="font-mono text-xs text-amber-300" x-text="ob.due_date_or_trigger + ' (' + ob.recurrence + ')'"></td>
+                        <td data-label="Penalty" class="text-xs text-rose-300" x-text="ob.penalty_for_breach || 'Standard Remedies'"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        </div>
+      </template>
+    </main>
+  </div>
+
+  <!-- Grounded Copilot Slide-Over Drawer -->
+  <aside
+    x-show="copilotOpen"
+    x-transition
+    aria-label="Grounded Legal AI Copilot"
+    class="fixed inset-y-0 right-0 z-40 w-full max-w-md bg-slate-950 border-l border-slate-800 shadow-2xl flex flex-col"
+  >
+    <div class="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
+      <div class="flex items-center gap-2.5">
+        <div class="h-8 w-8 rounded-lg bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300">
+          <i class="fa-solid fa-robot" aria-hidden="true"></i>
+        </div>
+        <div>
+          <h2 class="text-sm font-bold text-white">Grounded Legal Copilot</h2>
+          <p class="text-[11px] text-slate-400">RAG citations &amp; executive briefings</p>
+        </div>
+      </div>
+      <button type="button" @click="copilotOpen = false" aria-label="Close Copilot drawer" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+      </button>
+    </div>
+
+    <div class="p-3 border-b border-slate-800/80 flex flex-wrap gap-1.5 bg-slate-900/40">
+      <button type="button" @click="askCopilot('Generate a CFO Risk Summary for executive sign-off')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-slate-200">
+        💼 CFO Risk Summary
+      </button>
+      <button type="button" @click="askCopilot('Draft a pushback email to opposing counsel')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-slate-200">
+        ✉️ Pushback Email to Opposing Counsel
+      </button>
+      <button type="button" @click="askCopilot('Perform an uncapped indemnity trap check')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-800 hover:bg-indigo-600/30 border border-slate-700 text-slate-200">
+        ⚠️ Uncapped Indemnity Trap Check
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-4 space-y-3">
+      <template x-if="copilotMessages.length === 0">
+        <p class="text-xs text-slate-400 text-center py-8">Ask a grounded legal question about any clause or choose a quick briefing chip above.</p>
+      </template>
+      <template x-for="(msg, idx) in copilotMessages" :key="idx">
+        <div class="rounded-xl p-3 text-xs space-y-2" :class="msg.role === 'user' ? 'bg-indigo-600/20 border border-indigo-500/40 ml-8 text-indigo-100' : 'bg-slate-900 border border-slate-800 mr-4 text-slate-200'">
+          <p class="whitespace-pre-line leading-relaxed" x-text="msg.text"></p>
+          <div x-show="msg.citations && msg.citations.length" class="flex flex-wrap gap-1 pt-1">
+            <template x-for="cite in (msg.citations || [])" :key="cite">
+              <span class="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 font-mono text-[10px] border border-cyan-500/30" x-text="cite"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <form @submit.prevent="askCopilot(copilotInput)" class="p-3 border-t border-slate-800 flex gap-2 bg-slate-900/70">
+      <label for="copilot-input" class="visually-hidden">Ask Legal Copilot</label>
+      <input
+        id="copilot-input"
+        type="text"
+        x-model="copilotInput"
+        placeholder="Ask about liability caps, cure windows, AI rights..."
+        class="flex-1 rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-white"
+      />
+      <button type="submit" :disabled="copilotLoading || !activeContract" class="px-3.5 py-2 rounded-lg text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50">
+        Send
+      </button>
+    </form>
+  </aside>
+
+  <!-- Native <dialog> 1: Deal Room Multi-Doc Cross-Contract Conflict Audit -->
+  <dialog id="deal-room-dialog" closedby="any" aria-labelledby="deal-room-title">
+    <div class="p-5 border-b border-slate-800 flex items-center justify-between">
+      <div>
+        <h2 id="deal-room-title" class="text-lg font-extrabold text-white">Deal Room Cross-Contract Conflict Audit</h2>
+        <p class="text-xs text-slate-400">Select 2+ related agreements (MSA, DPA, SaaS, SOW) to detect precedence &amp; cap traps.</p>
+      </div>
+      <form method="dialog">
+        <button type="submit" value="close" aria-label="Close Deal Room dialog" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </form>
+    </div>
+
+    <div class="p-5 space-y-4 overflow-y-auto max-h-[72vh]">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <template x-for="c in contracts" :key="'dr-' + c.id">
+          <label class="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-800 bg-slate-950/70 cursor-pointer hover:border-indigo-500/50">
+            <input type="checkbox" :value="c.id" x-model="dealRoomSelectedIds" class="rounded border-slate-600 bg-slate-900 text-indigo-500" />
+            <span class="text-xs font-semibold text-slate-200 truncate" x-text="c.title"></span>
+          </label>
+        </template>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-mono text-slate-400" x-text="dealRoomSelectedIds.length + ' agreement(s) selected'"></span>
+        <button
+          type="button"
+          @click="runDealRoomAudit()"
+          :disabled="dealRoomSelectedIds.length < 2"
+          class="px-4 py-2 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 disabled:opacity-40"
+        >
+          Run Cross-Contract Audit
+        </button>
+      </div>
+
+      <template x-if="dealRoomResult">
+        <div class="space-y-3 pt-2 border-t border-slate-800">
+          <div class="flex items-center justify-between rounded-xl bg-slate-950 p-4 border border-slate-800">
+            <div>
+              <p class="text-xs text-slate-400 uppercase font-semibold">Deal Alignment Score</p>
+              <p class="text-xs text-slate-300 mt-1" x-text="dealRoomResult.summary"></p>
+            </div>
+            <span class="text-3xl font-black font-mono text-amber-400" x-text="dealRoomResult.deal_alignment_score + '%'"></span>
+          </div>
+
+          <template x-for="conf in (dealRoomResult.conflicts || [])" :key="conf.id">
+            <div class="rounded-xl border border-rose-500/35 bg-rose-950/20 p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-bold text-white" x-text="conf.conflict_type"></h3>
+                <span class="text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-rose-500/25 text-rose-300" x-text="conf.severity"></span>
+              </div>
+              <p class="text-xs text-slate-300" x-text="conf.precedence_risk_explanation"></p>
+              <div class="rounded-lg bg-slate-950/90 border border-slate-800 p-3">
+                <p class="text-[10px] font-bold uppercase text-emerald-400 mb-1">Recommended Harmonization Clause</p>
+                <p class="text-xs font-mono text-emerald-200" x-text="conf.harmonization_clause"></p>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </div>
+  </dialog>
+
+  <!-- Native <dialog> 2: Multi-Provider LLM Gateway & Telemetry Settings -->
+  <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-title">
+    <div class="p-5 border-b border-slate-800 flex items-center justify-between">
+      <div>
+        <h2 id="settings-title" class="text-lg font-extrabold text-white">LLM Gateway &amp; Telemetry Console</h2>
+        <p class="text-xs text-slate-400">Configure runtime model providers (with automatic fallback) and inspect token/cost metrics.</p>
+      </div>
+      <form method="dialog">
+        <button type="submit" value="close" aria-label="Close Settings dialog" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </form>
+    </div>
+
+    <div class="p-5 space-y-5 overflow-y-auto max-h-[72vh]">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label for="llm-provider-select" class="block text-xs font-semibold text-slate-300 mb-1">Active Provider</label>
+          <select id="llm-provider-select" x-model="llmForm.default_provider" class="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-white">
+            <option value="simulator">Deterministic Legal Simulator (Offline)</option>
+            <option value="gemini">Google Gemini (gemini-3.5-flash-lite)</option>
+            <option value="openai">OpenAI (gpt-4o)</option>
+            <option value="anthropic">Anthropic (claude-3-5-sonnet)</option>
+            <option value="ollama">Local Ollama (qwen3.5:4b)</option>
+          </select>
+        </div>
+        <div>
+          <label for="ollama-url-input" class="block text-xs font-semibold text-slate-300 mb-1">Ollama Base URL</label>
+          <input id="ollama-url-input" type="text" x-model="llmForm.ollama_base_url" placeholder="http://localhost:11434" class="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-white" />
+        </div>
+        <div>
+          <label for="gemini-key-input" class="block text-xs font-semibold text-slate-300 mb-1">Gemini API Key (Runtime Only)</label>
+          <input id="gemini-key-input" type="password" x-model="llmForm.gemini_api_key" placeholder="AIza..." class="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-white" />
+        </div>
+        <div>
+          <label for="openai-key-input" class="block text-xs font-semibold text-slate-300 mb-1">OpenAI API Key (Runtime Only)</label>
+          <input id="openai-key-input" type="password" x-model="llmForm.openai_api_key" placeholder="sk-..." class="w-full rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs text-white" />
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2">
+        <button type="button" @click="saveLLMConfig()" class="px-4 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white">
+          Apply Gateway Config
+        </button>
+      </div>
+
+      <!-- Telemetry Breakdown -->
+      <div class="border-t border-slate-800 pt-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold text-white">Measured Latency &amp; Cost Telemetry</h3>
+          <button type="button" @click="resetTelemetry()" class="px-3 py-1 rounded-lg text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/35 hover:bg-rose-500/35">
+            Reset Telemetry
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+            <p class="text-slate-400 text-[10px]">CALLS</p>
+            <p class="text-lg font-bold text-white" x-text="telemetry.total_records"></p>
+          </div>
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+            <p class="text-slate-400 text-[10px]">TOTAL TOKENS</p>
+            <p class="text-lg font-bold text-cyan-300" x-text="telemetry.total_tokens"></p>
+          </div>
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+            <p class="text-slate-400 text-[10px]">AVG LATENCY</p>
+            <p class="text-lg font-bold text-indigo-300" x-text="telemetry.avg_latency_ms + ' ms'"></p>
+          </div>
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+            <p class="text-slate-400 text-[10px]">TOTAL COST</p>
+            <p class="text-lg font-bold text-emerald-300" x-text="'$' + Number(telemetry.total_estimated_cost_usd || 0).toFixed(6)"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 7-Step Interactive Guided Rundown Tour Bubble (popover="manual" per persistent-app-tours) -->
+  <dialog id="tour-popover" popover="manual" role="dialog" aria-labelledby="tour-step-title">
+    <div class="space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-mono font-bold uppercase text-indigo-300" x-text="'Studio Tour • Step ' + (tourStep + 1) + ' of ' + tourSteps.length"></span>
+        <button type="button" @click="endTour()" aria-label="Skip guided tour" class="text-xs text-slate-400 hover:text-white">Skip</button>
+      </div>
+      <h2 id="tour-step-title" class="text-base font-extrabold text-white" x-text="tourSteps[tourStep]?.title"></h2>
+      <p class="text-xs text-slate-300 leading-relaxed" x-text="tourSteps[tourStep]?.body"></p>
+      <div class="flex items-center justify-between pt-2">
+        <button type="button" @click="prevTourStep()" :disabled="tourStep === 0" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 disabled:opacity-40">
+          Back
+        </button>
+        <button type="button" @click="nextTourStep()" class="px-4 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white">
+          <span x-text="tourStep === tourSteps.length - 1 ? 'Finish Tour' : 'Next Step'"></span>
+        </button>
+      </div>
+    </div>
+  </dialog>
+
+  <script>
+    // Progressive enhancement fallback for closedby="any" (modern-web-guidance dialog)
+    document.addEventListener('DOMContentLoaded', () => {
+      if (!('closedBy' in HTMLDialogElement.prototype)) {
+        const outside = (e, dialog) => {
+          const r = dialog.getBoundingClientRect();
+          return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+        };
+        for (const dialog of document.querySelectorAll('dialog[closedby="any"]')) {
+          let pressedOutside = false;
+          dialog.addEventListener('pointerdown', (e) => { pressedOutside = outside(e, dialog); });
+          dialog.addEventListener('pointerup', (e) => { if (pressedOutside && outside(e, dialog)) dialog.close(); });
+        }
+      }
+    });
+
+    function contractMindApp() {
+      return {
+        contracts: [],
+        activeContract: null,
+        playbooks: [],
+        selectedPlaybook: 'Standard Corporate Playbook',
+        playbookReport: null,
+        activeTab: 'redlines',
+        riskFilter: 'ALL',
+        decisionFilter: 'ALL',
+        promptDrafts: {},
+        regeneratingId: null,
+        syncScroll: true,
+        _isSyncingScroll: false,
+        loading: false,
+        sseStage: '',
+
+        copilotOpen: false,
+        copilotInput: '',
+        copilotLoading: false,
+        copilotMessages: [],
+
+        dealRoomSelectedIds: [],
+        dealRoomResult: null,
+
+        llmStatus: { default_provider: 'simulator', providers: {} },
+        llmForm: {
+          default_provider: 'simulator',
+          gemini_api_key: '',
+          openai_api_key: '',
+          ollama_base_url: 'http://localhost:11434',
+        },
+        telemetry: {
+          total_records: 0,
+          total_tokens: 0,
+          avg_latency_ms: 0,
+          total_estimated_cost_usd: 0,
+        },
+
+        demoSamples: [
+          { key: 'msa', label: 'MSA' },
+          { key: 'cloud_dpa', label: 'Cloud DPA' },
+          { key: 'saas', label: 'SaaS' },
+          { key: 'ma', label: 'M&A APA' },
+          { key: 'joint_ip', label: 'Joint IP' },
+          { key: 'nda', label: 'NDA' },
+        ],
+
+        tourActive: false,
+        tourStep: 0,
+        _highlightedEl: null,
+        tourSteps: [
+          {
+            target: '#tour-ingestion-panel',
+            title: '1. Ingestion, Table Extraction & PII Redaction',
+            body: 'Upload PDF contracts (PyMuPDF extracts tables into Markdown and automatically redacts SSNs, credit cards, EINs, and bank accounts) or launch a 1-click benchmark demo.',
+          },
+          {
+            target: '#tour-llm-engine',
+            title: '2. Multi-Provider LLM Gateway & Telemetry',
+            body: 'Switch seamlessly between Gemini 3.5 Flash-Lite, GPT-4o, Claude 3.5 Sonnet, local Ollama, or the deterministic offline Legal Simulator with live token and USD cost tracking.',
+          },
+          {
+            target: '#tour-action-bar',
+            title: '3. Native Word Track Changes, Clean Copy & ICS Sync',
+            body: 'Export authentic OpenXML w:del/w:ins Track Changes (.docx), bake accepted revisions into a clean execution draft, or sync obligation deadlines (.ics) to Google/Outlook Calendar.',
+          },
+          {
+            target: '#tour-redlines-toolbar',
+            title: '4. Risk Filtering & AI Prompt Rewriter',
+            body: 'Filter consensus redlines by Critical/High/Medium/Low severity and Accepted/Rejected/Pending status, or type custom instructions to regenerate any clause diff on demand.',
+            tab: 'redlines',
+          },
+          {
+            target: '#tour-dual-pane',
+            title: '5. Synchronized Dual-Pane Document Canvas',
+            body: 'Compare the original ingested agreement on the left against the color-coded Consensus Redline Draft on the right with locked synchronized scrolling.',
+            tab: 'dual',
+          },
+          {
+            target: '#tour-deal-room-btn',
+            title: '6. Deal Room Cross-Contract Conflict Audit',
+            body: 'Select multiple related agreements (MSA + DPA + SaaS Order Form) to expose conflicting liability caps, governing law traps, and inverted order-of-precedence clauses.',
+            tab: 'playbook',
+          },
+          {
+            target: '#tour-copilot-btn',
+            title: '7. Grounded Legal AI Copilot',
+            body: 'Open the RAG-grounded Copilot drawer for cited clause Q&A, instant CFO Risk Summaries, and opposing counsel pushback emails.',
+          },
+        ],
+
+        async init() {
+          await Promise.all([
+            this.fetchPlaybooks(),
+            this.fetchContracts(),
+            this.fetchLLMStatus(),
+            this.fetchTelemetry(),
+          ]);
+          if (this.contracts.length > 0) {
+            await this.selectContract(this.contracts[0].id);
+          }
+        },
+
+        async fetchPlaybooks() {
+          const res = await fetch('/api/v1/playbooks/');
+          if (res.ok) {
+            this.playbooks = await res.json();
+          }
+        },
+
+        async fetchContracts() {
+          const res = await fetch('/api/v1/contracts/');
+          if (res.ok) {
+            this.contracts = await res.json();
+          }
+        },
+
+        async fetchLLMStatus() {
+          const res = await fetch('/api/v1/analysis/llm/config');
+          if (res.ok) {
+            this.llmStatus = await res.json();
+            this.llmForm.default_provider = this.llmStatus.default_provider || 'simulator';
+          }
+        },
+
+        async fetchTelemetry() {
+          const res = await fetch('/api/v1/analysis/audit/summary');
+          if (res.ok) {
+            this.telemetry = await res.json();
+          }
+        },
+
+        async selectContract(id) {
+          const res = await fetch(`/api/v1/contracts/${id}`);
+          if (res.ok) {
+            this.activeContract = await res.json();
+            this.copilotMessages = [];
+            this.riskFilter = 'ALL';
+            this.decisionFilter = 'ALL';
+            await this.fetchPlaybookCompliance();
+          }
+        },
+
+        async fetchPlaybookCompliance() {
+          if (!this.activeContract) return;
+          const res = await fetch(`/api/v1/analysis/${this.activeContract.id}/compliance/playbook`);
+          if (res.ok) {
+            this.playbookReport = await res.json();
+          }
+        },
+
+        async uploadContract(event) {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          this.loading = true;
+          this.sseStage = 'Ingesting PDF, extracting tables & redacting PII...';
+          try {
+            const form = new FormData();
+            form.append('file', file);
+            form.append('playbook_name', this.selectedPlaybook);
+            const res = await fetch('/api/v1/contracts/upload?auto_analyze=true', {
+              method: 'POST',
+              body: form,
+            });
+            if (res.ok) {
+              const created = await res.json();
+              await this.fetchContracts();
+              await this.selectContract(created.id);
+              await this.fetchTelemetry();
+            }
+          } finally {
+            this.loading = false;
+            this.sseStage = '';
+            event.target.value = '';
+          }
+        },
+
+        async loadDemo(sampleType) {
+          this.loading = true;
+          this.sseStage = `Running Multi-Agent Debate on ${sampleType.toUpperCase()} benchmark...`;
+          try {
+            const res = await fetch(`/api/v1/contracts/demo/${sampleType}`, { method: 'POST' });
+            if (res.ok) {
+              const created = await res.json();
+              await this.fetchContracts();
+              await this.selectContract(created.id);
+              await this.fetchTelemetry();
+            }
+          } finally {
+            this.loading = false;
+            this.sseStage = '';
+          }
+        },
+
+        async deleteContract(id) {
+          const res = await fetch(`/api/v1/contracts/${id}`, { method: 'DELETE' });
+          if (res.ok) {
+            if (this.activeContract && this.activeContract.id === id) {
+              this.activeContract = null;
+              this.playbookReport = null;
+            }
+            await this.fetchContracts();
+            await this.fetchTelemetry();
+          }
+        },
+
+        streamAnalysis(contractId) {
+          this.loading = true;
+          this.sseStage = 'Connecting to StateGraph stream...';
+          const es = new EventSource(`/api/v1/stream/${contractId}`);
+          es.addEventListener('stage', (e) => {
+            const data = JSON.parse(e.data);
+            this.sseStage = `Node ${data.node}: ${data.status} (Risks: ${data.risks_count ?? 0}, Redlines: ${data.redlines_count ?? 0})`;
+          });
+          es.addEventListener('complete', async () => {
+            es.close();
+            this.loading = false;
+            this.sseStage = '';
+            await this.fetchContracts();
+            await this.selectContract(contractId);
+            await this.fetchTelemetry();
+          });
+          es.onerror = async () => {
+            es.close();
+            this.loading = false;
+            this.sseStage = '';
+          };
+        },
+
+        switchTab(tab) {
+          this.activeTab = tab;
+          if (tab === 'playbook' && this.activeContract) {
+            this.fetchPlaybookCompliance();
+          }
+        },
+
+        handleTabKeydown(event) {
+          const order = ['redlines', 'dual', 'playbook', 'debate', 'obligations'];
+          const idx = order.indexOf(this.activeTab);
+          if (event.key === 'ArrowRight') {
+            event.preventDefault();
+            const next = order[(idx + 1) % order.length];
+            this.switchTab(next);
+            document.getElementById(`tab-${next}`)?.focus();
+          } else if (event.key === 'ArrowLeft') {
+            event.preventDefault();
+            const prev = order[(idx - 1 + order.length) % order.length];
+            this.switchTab(prev);
+            document.getElementById(`tab-${prev}`)?.focus();
+          }
+        },
+
+        filteredRedlines() {
+          const list = this.activeContract?.redlines || [];
+          return list.filter((rl) => {
+            const sevOk = this.riskFilter === 'ALL' || (rl.risk_severity || '').toUpperCase() === this.riskFilter;
+            const decOk =
+              this.decisionFilter === 'ALL' ||
+              (this.decisionFilter === 'ACCEPTED' && rl.accepted === true) ||
+              (this.decisionFilter === 'REJECTED' && rl.accepted === false) ||
+              (this.decisionFilter === 'PENDING' && rl.accepted === null);
+            return sevOk && decOk;
+          });
+        },
+
+        countBySeverity(sev) {
+          const list = this.activeContract?.redlines || [];
+          if (sev === 'ALL') return list.length;
+          return list.filter((r) => (r.risk_severity || '').toUpperCase() === sev).length;
+        },
+
+        countByDecision(dec) {
+          const list = this.activeContract?.redlines || [];
+          if (dec === 'ALL') return list.length;
+          if (dec === 'ACCEPTED') return list.filter((r) => r.accepted === true).length;
+          if (dec === 'REJECTED') return list.filter((r) => r.accepted === false).length;
+          return list.filter((r) => r.accepted === null).length;
+        },
+
+        redlinesForSection(sectionNum) {
+          return (this.activeContract?.redlines || []).filter((r) => String(r.section_number) === String(sectionNum));
+        },
+
+        async decideRedline(redlineId, accepted) {
+          if (!this.activeContract) return;
+          const res = await fetch(`/api/v1/analysis/${this.activeContract.id}/redlines/${redlineId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accepted }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const idx = this.activeContract.redlines.findIndex((r) => r.id === redlineId);
+            if (idx >= 0) this.activeContract.redlines[idx] = data.redline;
+            await this.fetchPlaybookCompliance();
+          }
+        },
+
+        async regenerateRedline(redlineId) {
+          if (!this.activeContract) return;
+          const customPrompt = (this.promptDrafts[redlineId] || '').trim();
+          if (customPrompt.length < 3) return;
+          this.regeneratingId = redlineId;
+          try {
+            const res = await fetch(`/api/v1/analysis/${this.activeContract.id}/redlines/${redlineId}/regenerate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ custom_prompt: customPrompt }),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              const idx = this.activeContract.redlines.findIndex((r) => r.id === redlineId);
+              if (idx >= 0) this.activeContract.redlines[idx] = data.redline;
+              this.activeContract.debate_transcript = data.debate_transcript;
+              this.promptDrafts[redlineId] = '';
+              await Promise.all([this.fetchPlaybookCompliance(), this.fetchTelemetry()]);
+            }
+          } finally {
+            this.regeneratingId = null;
+          }
+        },
+
+        onPaneScroll(source) {
+          if (!this.syncScroll || this._isSyncingScroll) return;
+          const left = this.$refs.leftPane;
+          const right = this.$refs.rightPane;
+          if (!left || !right) return;
+          this._isSyncingScroll = true;
+          if (source === 'left') {
+            const ratio = left.scrollTop / Math.max(1, left.scrollHeight - left.clientHeight);
+            right.scrollTop = ratio * (right.scrollHeight - right.clientHeight);
+          } else {
+            const ratio = right.scrollTop / Math.max(1, right.scrollHeight - right.clientHeight);
+            left.scrollTop = ratio * (left.scrollHeight - left.clientHeight);
+          }
+          requestAnimationFrame(() => { this._isSyncingScroll = false; });
+        },
+
+        async askCopilot(question) {
+          if (!this.activeContract || !question || !question.trim()) return;
+          const text = question.trim();
+          this.copilotInput = '';
+          this.copilotMessages.push({ role: 'user', text });
+          this.copilotLoading = true;
+          try {
+            const res = await fetch(`/api/v1/copilot/${this.activeContract.id}/chat`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: text }),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              this.copilotMessages.push({
+                role: 'assistant',
+                text: data.answer,
+                citations: data.citations || [],
+              });
+              await this.fetchTelemetry();
+            }
+          } finally {
+            this.copilotLoading = false;
+          }
+        },
+
+        openDealRoomModal() {
+          this.dealRoomSelectedIds = this.contracts.slice(0, 3).map((c) => c.id);
+          const dlg = document.getElementById('deal-room-dialog');
+          if (dlg && !dlg.open) dlg.showModal();
+        },
+
+        async runDealRoomAudit() {
+          if (this.dealRoomSelectedIds.length < 2) return;
+          const res = await fetch('/api/v1/analysis/deal-room/conflicts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.dealRoomSelectedIds),
+          });
+          if (res.ok) {
+            this.dealRoomResult = await res.json();
+          }
+        },
+
+        openSettingsDialog() {
+          const dlg = document.getElementById('settings-dialog');
+          if (dlg && !dlg.open) dlg.showModal();
+        },
+
+        async saveLLMConfig() {
+          const payload = {
+            default_provider: this.llmForm.default_provider,
+            ollama_base_url: this.llmForm.ollama_base_url,
+          };
+          if (this.llmForm.gemini_api_key) payload.gemini_api_key = this.llmForm.gemini_api_key;
+          if (this.llmForm.openai_api_key) payload.openai_api_key = this.llmForm.openai_api_key;
+
+          const res = await fetch('/api/v1/analysis/llm/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            this.llmStatus = await res.json();
+            document.getElementById('settings-dialog')?.close();
+          }
+        },
+
+        async resetTelemetry() {
+          const res = await fetch('/api/v1/analysis/audit/reset', { method: 'DELETE' });
+          if (res.ok) {
+            await this.fetchTelemetry();
+          }
+        },
+
+        handleEscape() {
+          if (this.copilotOpen) this.copilotOpen = false;
+          if (this.tourActive) this.endTour();
+        },
+
+        async startTour() {
+          if (!this.activeContract && this.contracts.length === 0) {
+            await this.loadDemo('msa');
+          }
+          this.tourActive = true;
+          this.tourStep = 0;
+          this.applyTourStep();
+        },
+
+        applyTourStep() {
+          if (this._highlightedEl) {
+            this._highlightedEl.classList.remove('tour-spotlight-active');
+          }
+          const step = this.tourSteps[this.tourStep];
+          if (!step) return;
+          if (step.tab) {
+            this.switchTab(step.tab);
+          }
+          this.$nextTick(() => {
+            const target = document.querySelector(step.target);
+            const pop = document.getElementById('tour-popover');
+            if (target) {
+              target.classList.add('tour-spotlight-active');
+              target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              this._highlightedEl = target;
+              const rect = target.getBoundingClientRect();
+              if (pop) {
+                const top = Math.min(window.innerHeight - 230, Math.max(16, rect.bottom + 12));
+                const left = Math.min(window.innerWidth - 410, Math.max(16, rect.left));
+                pop.style.top = `${top}px`;
+                pop.style.left = `${left}px`;
+              }
+            }
+            if (pop) {
+              if (typeof pop.showPopover === 'function' && !pop.matches(':popover-open')) {
+                pop.showPopover();
+              } else {
+                pop.classList.add(':popover-open');
+                pop.setAttribute('open', '');
+              }
+              pop.querySelector('button')?.focus();
+            }
+          });
+        },
+
+        nextTourStep() {
+          if (this.tourStep >= this.tourSteps.length - 1) {
+            this.endTour();
+            return;
+          }
+          this.tourStep += 1;
+          this.applyTourStep();
+        },
+
+        prevTourStep() {
+          if (this.tourStep > 0) {
+            this.tourStep -= 1;
+            this.applyTourStep();
+          }
+        },
+
+        endTour() {
+          this.tourActive = false;
+          if (this._highlightedEl) {
+            this._highlightedEl.classList.remove('tour-spotlight-active');
+            this._highlightedEl = null;
+          }
+          const pop = document.getElementById('tour-popover');
+          if (pop) {
+            if (typeof pop.hidePopover === 'function') {
+              try { pop.hidePopover(); } catch (_) {}
+            }
+            pop.classList.remove(':popover-open');
+            pop.removeAttribute('open');
+          }
+        },
+      };
+    }
+  </script>
+</body>
+</html>
