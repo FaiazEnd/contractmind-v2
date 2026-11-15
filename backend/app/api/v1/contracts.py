@@ -105,7 +105,8 @@ async def load_demo_contract(
     return contract
 
 
-@router.get("/", response_model=List[ContractListItem])
+@router.get("", response_model=List[ContractListItem])
+@router.get("/", response_model=List[ContractListItem], include_in_schema=False)
 async def list_contracts(db: AsyncSession = Depends(get_db)) -> List[Contract]:
     """List all contracts ordered by created_at DESC."""
     res = await db.execute(select(Contract).order_by(desc(Contract.created_at)))

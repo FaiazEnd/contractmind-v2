@@ -16,7 +16,8 @@ from app.services.playbook_engine import ensure_default_playbooks
 router = APIRouter()
 
 
-@router.get("/", response_model=List[PlaybookResponse])
+@router.get("", response_model=List[PlaybookResponse])
+@router.get("/", response_model=List[PlaybookResponse], include_in_schema=False)
 async def list_playbooks(db: AsyncSession = Depends(get_db)) -> List[Playbook]:
     """List all configured corporate legal playbooks."""
     await ensure_default_playbooks(db)
@@ -24,7 +25,8 @@ async def list_playbooks(db: AsyncSession = Depends(get_db)) -> List[Playbook]:
     return list(res.scalars().all())
 
 
-@router.post("/", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=PlaybookResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 async def create_playbook(payload: PlaybookCreate, db: AsyncSession = Depends(get_db)) -> Playbook:
     """Create a custom corporate legal playbook."""
     existing = await db.execute(select(Playbook).where(Playbook.name == payload.name))

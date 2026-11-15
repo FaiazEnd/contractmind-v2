@@ -1175,14 +1175,14 @@
         },
 
         async fetchPlaybooks() {
-          const res = await fetch('/api/v1/playbooks/');
+          const res = await fetch('/api/v1/playbooks');
           if (res.ok) {
             this.playbooks = await res.json();
           }
         },
 
         async fetchContracts() {
-          const res = await fetch('/api/v1/contracts/');
+          const res = await fetch('/api/v1/contracts');
           if (res.ok) {
             this.contracts = await res.json();
           }
