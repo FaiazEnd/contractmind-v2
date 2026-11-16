@@ -126,12 +126,14 @@ async def copilot_chat(
         rag_engine.index_contract(contract_id, contract.extracted_sections or [], contract.raw_text or "")
 
     rag_hits = rag_engine.query_similar(contract_id, payload.message, n_results=4)
+    kb_hits = rag_engine.query_knowledge_base(payload.message, n_results=2)
 
     def _fallback() -> str:
         ans, _ = _build_deterministic_copilot_reply(contract, payload.message, rag_hits)
         return ans
 
     context_block = "\n".join(h["text"] for h in rag_hits)
+    precedent_block = "\n".join(p["text"] for p in kb_hits)
     redline_block = "\n".join(
         f"[Section {r.get('section_number')}] ({r.get('risk_severity')}): {r.get('legal_rationale')} -> Suggested: {r.get('suggested_text')}"
         for r in (contract.redlines or [])[:5]
@@ -140,15 +142,20 @@ async def copilot_chat(
     llm_resp = await llm_gateway.generate(
         prompt=(
             f"Contract: {contract.title} (Risk Score: {contract.overall_risk_score}/100)\n"
-            f"Relevant RAG Passages:\n{context_block}\n\n"
+            f"Relevant Contract Passages:\n{context_block}\n\n"
+            f"External Legal Precedents & Market Fallbacks:\n{precedent_block}\n\n"
             f"Synthesized Redlines:\n{redline_block}\n\n"
             f"User Question: {payload.message}"
         ),
-        system_prompt="You are ContractMind Legal AI Copilot. Answer strictly grounded in the provided contract passages and cite [Section X].",
+        system_prompt="You are ContractMind Legal AI Copilot. Answer grounded in the provided contract passages and external legal precedents, citing [Section X] and precedent sources.",
         fallback_fn=_fallback,
     )
 
     _, default_citations = _build_deterministic_copilot_reply(contract, payload.message, rag_hits)
+    for p in kb_hits:
+        cit = f"[{p['source']}: {p['category']}]"
+        if cit not in default_citations:
+            default_citations.append(cit)
     latency_ms = max(round((time.time() - start) * 1000.0, 2), llm_resp.latency_ms)
 
     db.add(

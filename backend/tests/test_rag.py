@@ -52,3 +52,10 @@ def test_rag_index_query_and_delete_purge() -> None:
     engine.delete_contract_index(cid)
     hits_after = engine.query_similar(cid, "uncapped indemnification", n_results=2)
     assert hits_after == []
+
+
+def test_rag_external_knowledge_base_retrieval() -> None:
+    engine = RAGEngine()
+    kb_hits = engine.query_knowledge_base("AI model training on customer data", n_results=2)
+    assert len(kb_hits) >= 1
+    assert any("AI" in h["category"] for h in kb_hits)

@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Any
 
 from app.config import settings
+from app.services.legal_knowledge_base import LEGAL_PRECEDENT_DATASET
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -46,6 +47,7 @@ class RAGEngine:
         self._using_chroma = False
         self._memory_store: dict[str, list[dict[str, Any]]] = {}
         self._init_chroma()
+        self.index_knowledge_base()
 
     def _init_chroma(self) -> None:
         try:
@@ -216,6 +218,93 @@ class RAGEngine:
                 self._chroma_client.delete_collection(name=col_name)
             except Exception:
                 pass
+
+    def index_knowledge_base(self) -> int:
+        """Index the curated external CUAD-style legal precedent dataset into a shared RAG store."""
+        kb_id = "__external_knowledge_base__"
+        entries: list[dict[str, Any]] = []
+        for item in LEGAL_PRECEDENT_DATASET:
+            full_text = (
+                f"[{item['source']} — {item['category']}] "
+                f"Risk: {item['risk_pattern']} "
+                f"Market Standard Fallback: {item['market_standard_fallback']} "
+                f"Guidance: {item['guidance']}"
+            )
+            entries.append(
+                {
+                    "id": item["id"],
+                    "text": full_text,
+                    "section_number": item["category"],
+                    "title": item["source"],
+                    "page_number": 1,
+                }
+            )
+
+        if self._using_chroma and self._chroma_client is not None:
+            try:
+                collection = self._chroma_client.get_or_create_collection(name="legal_knowledge_base")
+                if collection.count() == 0:
+                    collection.add(
+                        ids=[e["id"] for e in entries],
+                        documents=[e["text"] for e in entries],
+                        metadatas=[
+                            {"source": e["title"], "category": e["section_number"]}
+                            for e in entries
+                        ],
+                    )
+                return len(entries)
+            except Exception:
+                self._using_chroma = False
+
+        self._memory_store[kb_id] = [
+            {**e, "vector": _term_frequency(_tokenize(e["text"]))}
+            for e in entries
+        ]
+        return len(entries)
+
+    def query_knowledge_base(self, query: str, n_results: int = 2) -> list[dict[str, Any]]:
+        """Retrieve top matching external legal precedents & market-standard fallbacks."""
+        if not query.strip():
+            return []
+
+        if self._using_chroma and self._chroma_client is not None:
+            try:
+                collection = self._chroma_client.get_collection(name="legal_knowledge_base")
+                count = collection.count()
+                if count > 0:
+                    res = collection.query(query_texts=[query], n_results=min(n_results, count))
+                    docs = (res.get("documents") or [[]])[0]
+                    metas = (res.get("metadatas") or [[]])[0]
+                    dists = (res.get("distances") or [[]])[0]
+                    return [
+                        {
+                            "text": doc,
+                            "category": str((meta or {}).get("category", "Precedent")),
+                            "source": str((meta or {}).get("source", "External KB")),
+                            "score": round(max(0.0, 1.0 - float(dist)), 4),
+                        }
+                        for doc, meta, dist in zip(docs, metas, dists)
+                    ]
+            except Exception:
+                pass
+
+        entries = self._memory_store.get("__external_knowledge_base__", [])
+        if not entries:
+            self.index_knowledge_base()
+            entries = self._memory_store.get("__external_knowledge_base__", [])
+
+        q_vec = _term_frequency(_tokenize(query))
+        scored = [
+            {
+                "text": entry["text"],
+                "category": entry["section_number"],
+                "source": entry["title"],
+                "score": round(_cosine_similarity(q_vec, entry["vector"]), 4),
+            }
+            for entry in entries
+        ]
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:n_results]
 
 
 rag_engine = RAGEngine()
