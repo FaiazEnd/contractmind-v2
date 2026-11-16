@@ -1,17 +1,16 @@
-import fs from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(): Promise<NextResponse> {
   const htmlPath = path.join(process.cwd(), 'public', 'index.html');
-  const html = fs.readFileSync(htmlPath, 'utf-8');
+  const html = await readFile(htmlPath, 'utf-8');
   return new NextResponse(html, {
     status: 200,
     headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
+      'content-type': 'text/html; charset=utf-8',
     },
   });
 }

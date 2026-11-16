@@ -1,8 +1,6 @@
-"""Grounded Legal AI Copilot & CFO Briefing Generator endpoint."""
-
+"""Grounded Legal AI Copilot & CFO Briefing Generator endpoints."""
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -16,99 +14,7 @@ from app.models.contract import Contract
 from app.schemas.contract_schemas import CopilotChatRequest, CopilotChatResponse
 from app.services.rag_engine import rag_engine
 
-router = APIRouter(prefix="/copilot", tags=["Legal AI Copilot"])
-
-
-def _build_deterministic_copilot_reply(
-    contract: Contract,
-    message: str,
-    rag_hits: list[dict[str, Any]],
-) -> tuple[str, list[str]]:
-    lower = message.lower()
-    risks = contract.identified_risks or []
-    redlines = contract.redlines or []
-    obligations = contract.obligations or []
-    citations = [f"[Section {h['section_number']}]" for h in rag_hits if h.get("section_number")]
-    for r in risks:
-        c = f"[Section {r.get('section_number', '1')}]"
-        if c not in citations:
-            citations.append(c)
-
-    if "cfo" in lower or "brief" in lower or "executive" in lower or "summary" in lower:
-        crit = sum(1 for r in risks if r.get("severity") == "CRITICAL")
-        high = sum(1 for r in risks if r.get("severity") == "HIGH")
-        accepted = sum(1 for rl in redlines if rl.get("accepted") is True)
-        top_risks = "; ".join(f"{r['category']} ([Section {r['section_number']}])" for r in risks[:3])
-        answer = (
-            f"**CFO Executive Risk Briefing — {contract.title}**\n\n"
-            f"- **Composite Risk Score:** {contract.overall_risk_score}/100 ({crit} Critical, {high} High exposures)\n"
-            f"- **Redline Status:** {accepted}/{len(redlines)} consensus revisions accepted\n"
-            f"- **Key Financial & Operational Traps:** {top_risks or 'No material traps detected'}\n"
-            f"- **Tracked Obligations:** {len(obligations)} operational duties mapped for calendar compliance.\n\n"
-            "**Recommendation:** Do not execute until Critical uncapped liability/AI-training redlines are accepted and baked into the Clean Execution Draft."
-        )
-        return answer, citations[:5]
-
-    if "pushback" in lower or "email" in lower or "opposing" in lower:
-        bullet_lines = "\n".join(
-            f"- **[Section {rl.get('section_number', '1')}] ({rl.get('risk_severity', 'HIGH')}):** {rl.get('legal_rationale', '').split(':')[0]} — proposing balanced fallback language."
-            for rl in redlines[:4]
-        )
-        answer = (
-            f"**Subject: Commercial Redlines & Consensus Markup — {contract.title}**\n\n"
-            "Counsel,\n\n"
-            "Thank you for circulating the draft agreement. We have completed our corporate risk review and attach our targeted Track Changes package focused exclusively on market-standard alignment:\n\n"
-            f"{bullet_lines or '- Standard commercial cleanups only.'}\n\n"
-            "We are aligned on core commercial scope and pricing and look forward to finalizing execution following confirmation of these protective edits.\n\n"
-            "Best regards,\nEnterprise Legal Team"
-        )
-        return answer, citations[:5]
-
-    if "indemn" in lower or "liability" in lower or "uncapped" in lower:
-        ind_risks = [r for r in risks if "indemn" in r.get("category", "").lower() or "consequential" in r.get("category", "").lower()]
-        if ind_risks:
-            details = "\n".join(
-                f"- **[Section {r['section_number']}] {r['category']} ({r['severity']}):** \"{r['matched_excerpt']}\" → Recommended mitigation: {r['suggested_mitigation']}"
-                for r in ind_risks
-            )
-            answer = f"**Uncapped Indemnity & Liability Trap Check:**\n\n{details}"
-        else:
-            passages = "\n".join(f"- [Section {h['section_number']}]: {h['text'][:220]}" for h in rag_hits[:2])
-            answer = (
-                f"**Liability & Indemnity Audit for {contract.title}:**\n"
-                "No uncapped indemnification trap matched our critical signature, though counsel should verify cap multipliers in:\n"
-                f"{passages or 'All liability clauses reviewed.'}"
-            )
-        return answer, citations[:5]
-
-    # General grounded RAG QA
-    if rag_hits:
-        passages_str = "\n".join(
-            f"- **[Section {h['section_number']}: {h['title']}]** {h['text'].split('] ', 1)[-1][:260]}"
-            for h in rag_hits[:3]
-        )
-        matching_redlines = [
-            rl for rl in redlines if str(rl.get("section_number")) in {str(h["section_number"]) for h in rag_hits}
-        ]
-        rl_note = ""
-        if matching_redlines:
-            rl_note = (
-                "\n\n**Related Arbiter Redlines:**\n"
-                + "\n".join(
-                    f"- [Section {rl['section_number']}] ({rl['risk_severity']}): {rl['suggested_text'][:180]}"
-                    for rl in matching_redlines[:2]
-                )
-            )
-        answer = (
-            f"Based on the retrieved clauses of **{contract.title}**:\n\n"
-            f"{passages_str}{rl_note}"
-        )
-    else:
-        answer = (
-            f"Reviewed **{contract.title}** (Composite Risk: {contract.overall_risk_score}/100, {len(redlines)} redlines, "
-            f"{len(obligations)} obligations). Ask about specific sections such as indemnification, AI training, termination, or governing law for exact clause citations."
-        )
-    return answer, citations[:5]
+router = APIRouter(prefix="/copilot", tags=["copilot"])
 
 
 @router.post("/{contract_id}/chat", response_model=CopilotChatResponse)
@@ -117,70 +23,154 @@ async def copilot_chat(
     payload: CopilotChatRequest,
     db: AsyncSession = Depends(get_db),
 ) -> CopilotChatResponse:
-    """Grounded Legal AI Copilot using RAG passages, redlines, and negotiation transcript."""
-    start = time.time()
+    """Answer legal inquiries grounded in contract RAG chunks, redlines, debate, and SEC EDGAR precedents."""
     contract = await get_contract_or_404(contract_id, db)
+    question = payload.message.strip()
 
-    # Ensure index is populated (helpful after process restarts if in-memory fallback is active)
-    if not rag_engine.query_similar(contract_id, payload.message, n_results=1):
-        rag_engine.index_contract(contract_id, contract.extracted_sections or [], contract.raw_text or "")
+    # Ensure RAG is indexed for this contract
+    if contract.extracted_sections:
+        rag_engine.index_contract(contract.id, contract.extracted_sections)
+    rag_engine.index_knowledge_base()
 
-    rag_hits = rag_engine.query_similar(contract_id, payload.message, n_results=4)
-    kb_hits = rag_engine.query_knowledge_base(payload.message, n_results=2)
+    passages = rag_engine.query_similar(contract.id, question, n_results=4)
+    precedents = rag_engine.query_knowledge_base(question, n_results=2)
 
-    def _fallback() -> str:
-        ans, _ = _build_deterministic_copilot_reply(contract, payload.message, rag_hits)
-        return ans
+    citations = []
+    for p in passages:
+        sec_num = p.get("section_number")
+        if sec_num:
+            tag = f"[Section {sec_num}]"
+            if tag not in citations:
+                citations.append(tag)
+    if not citations and contract.extracted_sections:
+        citations = [
+            f"[Section {s.get('section_number', '1')}]"
+            for s in contract.extracted_sections[:2]
+        ]
 
-    context_block = "\n".join(h["text"] for h in rag_hits)
-    precedent_block = "\n".join(p["text"] for p in kb_hits)
-    redline_block = "\n".join(
-        f"[Section {r.get('section_number')}] ({r.get('risk_severity')}): {r.get('legal_rationale')} -> Suggested: {r.get('suggested_text')}"
+    fallback_answer = _build_grounded_fallback_answer(
+        contract=contract,
+        question=question,
+        passages=passages,
+        precedents=precedents,
+        citations=citations,
+    )
+
+    context_block = "\n".join(p.get("text", "")[:400] for p in passages)
+    redline_summary = "\n".join(
+        f"- [Section {r.get('section_number')}] ({r.get('risk_severity')}): {r.get('legal_rationale')}"
         for r in (contract.redlines or [])[:5]
     )
-
-    llm_resp = await llm_gateway.generate(
-        prompt=(
-            f"Contract: {contract.title} (Risk Score: {contract.overall_risk_score}/100)\n"
-            f"Relevant Contract Passages:\n{context_block}\n\n"
-            f"External Legal Precedents & Market Fallbacks:\n{precedent_block}\n\n"
-            f"Synthesized Redlines:\n{redline_block}\n\n"
-            f"User Question: {payload.message}"
-        ),
-        system_prompt="You are ContractMind Legal AI Copilot. Answer grounded in the provided contract passages and external legal precedents, citing [Section X] and precedent sources.",
-        fallback_fn=_fallback,
+    precedent_block = "\n".join(
+        f"- {pr.get('category')}: {pr.get('text', '')[:250]}" for pr in precedents
     )
 
-    _, default_citations = _build_deterministic_copilot_reply(contract, payload.message, rag_hits)
-    for p in kb_hits:
-        cit = f"[{p['source']}: {p['category']}]"
-        if cit not in default_citations:
-            default_citations.append(cit)
-    latency_ms = max(round((time.time() - start) * 1000.0, 2), llm_resp.latency_ms)
+    llm_res = await llm_gateway.generate(
+        prompt=(
+            f"Contract: {contract.title} (Risk Score: {contract.overall_risk_score}/100)\n"
+            f"Question: {question}\n\n"
+            f"Relevant Contract Passages:\n{context_block}\n\n"
+            f"Synthesized Redlines:\n{redline_summary}\n\n"
+            f"SEC EDGAR / LEDGAR Precedents:\n{precedent_block}\n\n"
+            "Provide a clear, executive-ready legal answer citing exact section references like [Section X]."
+        ),
+        system_prompt="You are ContractMind Legal AI Copilot. Always ground answers in retrieved contract sections and precedents.",
+        fallback_text=fallback_answer,
+    )
 
     db.add(
         AuditLog(
             contract_id=contract.id,
             agent_name="Legal AI Copilot",
-            action="grounded_rag_chat",
-            model_name=llm_resp.model_name,
-            prompt_tokens=llm_resp.prompt_tokens,
-            completion_tokens=llm_resp.completion_tokens,
-            total_tokens=llm_resp.total_tokens,
-            latency_ms=latency_ms,
-            estimated_cost_usd=llm_resp.estimated_cost_usd,
+            action="grounded_copilot_chat",
+            model_name=llm_res.model,
+            prompt_tokens=llm_res.prompt_tokens,
+            completion_tokens=llm_res.completion_tokens,
+            total_tokens=llm_res.total_tokens,
+            latency_ms=llm_res.latency_ms,
+            estimated_cost_usd=llm_res.estimated_cost_usd,
         )
     )
     await db.commit()
 
     return CopilotChatResponse(
-        contract_id=contract.id,
-        answer=llm_resp.text,
-        citations=default_citations,
-        suggested_followups=[
-            "Draft CFO Risk Summary",
-            "Draft Pushback Email to Opposing Counsel",
-            "Check Uncapped Indemnity & Liability Traps",
+        answer=llm_res.text,
+        citations=citations,
+        precedents=precedents,
+        suggested_prompts=[
+            "Generate a 3-bullet CFO Risk Summary for executive sign-off",
+            "Draft a firm pushback email to Opposing Counsel",
+            "Check for uncapped indemnity or AI training traps",
         ],
-        model_used=llm_resp.model_name,
+        model_used=llm_res.model,
+    )
+
+
+def _build_grounded_fallback_answer(
+    contract: Contract,
+    question: str,
+    passages: list[dict[str, Any]],
+    precedents: list[dict[str, Any]],
+    citations: list[str],
+) -> str:
+    q = question.lower()
+    risks = contract.identified_risks or []
+    redlines = contract.redlines or []
+    obligations = contract.obligations or []
+    cite_str = ", ".join(citations) if citations else "[Section 1]"
+    prec_cat = precedents[0]["category"] if precedents else "Commercial Standards"
+    prec_excerpt = precedents[0]["text"][:220] if precedents else ""
+
+    if "cfo" in q or "brief" in q or "executive" in q:
+        crit = sum(1 for r in risks if str(r.get("severity", "")).upper() == "CRITICAL")
+        high = sum(1 for r in risks if str(r.get("severity", "")).upper() == "HIGH")
+        return (
+            f"**CFO Executive Risk Briefing — {contract.title}**\n\n"
+            f"• **Composite Risk Posture:** {contract.overall_risk_score}/100 ({crit} Critical, {high} High risks flagged across {cite_str}).\n"
+            f"• **Balance Sheet Exposure:** Key financial traps identified include "
+            + (", ".join(r["category"] for r in risks[:3]) or "standard commercial terms")
+            + f". {len(redlines)} consensus redline(s) have been drafted to cap liability and prevent unbudgeted penalties.\n"
+            f"• **Operational Commitments:** {len(obligations)} calendarized obligation(s) extracted (payment, audit, deletion, and notice windows).\n"
+            f"• **SEC EDGAR Benchmark ({prec_cat}):** {prec_excerpt}"
+        )
+
+    if "email" in q or "pushback" in q or "opposing" in q:
+        bullet_issues = "\n".join(
+            f"- **Section {r.get('section_number')} ({r.get('risk_severity')}):** {r.get('legal_rationale')}"
+            for r in redlines[:4]
+        ) or "- Align liability caps and termination cure windows with mutual market standards."
+        return (
+            f"**Subject:** Proposed Legal Revisions — {contract.title}\n\n"
+            "Dear Counterparty Counsel,\n\n"
+            f"Thank you for sharing the draft {contract.title}. Following our multi-agent compliance review ({cite_str}), "
+            "we can proceed to execution once the following critical points are harmonized:\n\n"
+            f"{bullet_issues}\n\n"
+            f"Our attached redlines incorporate balanced market language aligned with SEC EDGAR precedent ({prec_cat}). "
+            "Please let us know if you are available for a brief call to finalize.\n\nBest regards,\nEnterprise Legal Counsel"
+        )
+
+    if "indemn" in q or "uncapped" in q or "trap" in q or "ai" in q:
+        matched = [
+            r
+            for r in risks
+            if any(k in r["category"].lower() for k in ("indemn", "ai", "damages", "trap", "penalty"))
+        ]
+        if matched:
+            details = "\n".join(
+                f"• **[Section {r['section_number']}] {r['category']} ({r['severity']}):** {r['legal_rationale']} Mitigation: {r['suggested_mitigation']}"
+                for r in matched
+            )
+        else:
+            details = f"• Reviewed {cite_str}: No uncapped indemnity trap matched, though standard cap verification is advised."
+        return (
+            f"**Trap & Exposure Audit ({cite_str})**\n\n{details}\n\n"
+            f"**Relevant SEC EDGAR Precedent ({prec_cat}):** {prec_excerpt}"
+        )
+
+    top_passage = passages[0]["text"][:320] if passages else (contract.raw_text or "")[:320]
+    return (
+        f"**Grounded Analysis ({cite_str})**\n\n"
+        f"Based on the contract text (`{top_passage}...`), our review identified **{len(risks)} risk(s)** "
+        f"with a composite score of **{contract.overall_risk_score}/100** and **{len(redlines)} consensus redline(s)**.\n\n"
+        f"**SEC EDGAR / LEDGAR Precedent ({prec_cat}):** {prec_excerpt}"
     )

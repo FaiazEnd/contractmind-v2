@@ -1,5 +1,4 @@
-"""Auditor Agent Node: Enterprise defender & compliance risk scanner across 10 canonical risk categories."""
-
+"""Auditor Agent: Enterprise compliance defender scanning sections against 10 risk categories."""
 from __future__ import annotations
 
 import re
@@ -9,261 +8,320 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agents.llm_client import llm_gateway
-from app.agents.state import ContractGraphState
+from app.agents.state import ContractAnalysisState
 
 
-RISK_SIGNATURES: list[dict[str, Any]] = [
+RISK_RULES: list[dict[str, Any]] = [
     {
-        "key": "uncapped_indemnification",
         "category": "Uncapped Indemnification",
         "severity": "CRITICAL",
-        "score": 90.0,
+        "score": 90,
         "pattern": re.compile(
-            r"(?:unlimited|uncapped|without\s+(?:any\s+)?(?:cap|limitation)|no\s+monetary\s+cap)[^.]*indemnif|indemnif[^.]*(?:unlimited|uncapped|without\s+limitation|all\s+claims\s+whatsoever)",
-            re.IGNORECASE,
+            r"(?:indemnif(?:y|ication)|hold\s+harmless).{0,220}?(?:without\s+limitation|unlimited|uncapped|all\s+claims\s+whatsoever|regardless\s+of\s+cap)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Exposes the enterprise to unbounded balance-sheet liability far exceeding contract value without a reciprocal 12-month fee cap.",
-        "suggested_mitigation": "Party's aggregate indemnification obligations under this Agreement shall be capped at one times (1x) the total fees paid or payable in the twelve (12) months preceding the claim, and conditioned on prompt written notice and defense control.",
+        "legal_rationale": (
+            "Clause imposes uncapped or unlimited indemnification liability without a negotiated monetary ceiling or fault nexus, exposing the balance sheet to existential loss."
+        ),
+        "suggested_mitigation": (
+            "Cap third-party indemnification obligations at two times (2x) annual contract fees, conditioned upon prompt written notice, reasonable cooperation, and sole defense control."
+        ),
+        "consensus_replacement": (
+            "Each party shall defend, indemnify, and hold harmless the other party from third-party intellectual property infringement or bodily injury claims directly caused by the indemnifying party's gross negligence or willful misconduct, subject to an aggregate liability super-cap equal to two times (2x) the total fees paid under this Agreement in the preceding twelve (12) months, conditioned on prompt written notice and sole control of defense."
+        ),
     },
     {
-        "key": "consequential_damages_missing",
         "category": "Consequential Damages Waiver Missing",
         "severity": "HIGH",
-        "score": 75.0,
+        "score": 75,
         "pattern": re.compile(
-            r"(?:liable\s+for\s+(?:all\s+)?(?:indirect|consequential|incidental|special|punitive)|including\s+lost\s+profits|no\s+waiver\s+of\s+consequential|shall\s+not\s+exclude\s+consequential)",
-            re.IGNORECASE,
+            r"(?:consequential|indirect|special|punitive|incidental)\s+damages.{0,180}?(?:shall\s+be\s+recoverable|not\s+excluded|excluded\s+solely\s+for\s+(?:vendor|provider)|only\s+vendor\s+shall\s+not)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Permits recovery of speculative indirect damages and lost profits, multiplying financial exposure beyond direct contract losses.",
-        "suggested_mitigation": "In no event shall either party be liable to the other for any indirect, incidental, special, consequential, or punitive damages, or loss of profits, revenue, or data, even if advised of the possibility of such damages.",
+        "legal_rationale": (
+            "Agreement fails to establish a mutual waiver of indirect, consequential, or lost-profit damages, or shields only the counterparty."
+        ),
+        "suggested_mitigation": (
+            "Insert a bilateral waiver excluding indirect, incidental, consequential, and punitive damages for both parties."
+        ),
+        "consensus_replacement": (
+            "NEITHER PARTY SHALL BE LIABLE TO THE OTHER FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, OR DATA, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES, AND AGGREGATE DIRECT LIABILITY SHALL NOT EXCEED TWELVE (12) MONTHS OF FEES PAID."
+        ),
     },
     {
-        "key": "ai_model_training",
         "category": "AI Model Training on Proprietary Data",
         "severity": "CRITICAL",
-        "score": 95.0,
+        "score": 95,
         "pattern": re.compile(
-            r"(?:train\s+(?:its\s+|any\s+)?(?:proprietary\s+)?(?:ai|artificial\s+intelligence|machine\s+learning|foundation)\s+models?|use\s+customer\s+data\s+to\s+improve\s+(?:ai|models|algorithms)|perpetual\s+(?:royalty-free\s+)?license\s+to\s+(?:all\s+)?(?:inputs|customer\s+data))",
-            re.IGNORECASE,
+            r"(?:train|training|fine-tun(?:e|ing)|improv(?:e|ing))\s+(?:our\s+|its\s+|generalized\s+)?(?:artificial\s+intelligence|ai|machine\s+learning|llm|foundation)\s+models|(?:perpetual|irrevocable|royalty-free)\s+license\s+to\s+(?:use|reproduce|train).{0,100}?(?:customer\s+data|inputs|prompts|content)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Transfers enterprise trade secrets, confidential prompts, and proprietary datasets into vendor foundation models without isolation guarantees.",
-        "suggested_mitigation": "Vendor shall process Customer Data strictly to perform the Services and shall not use Customer Data, prompts, or outputs to train, fine-tune, or improve any artificial intelligence or machine learning models.",
+        "legal_rationale": (
+            "Counterparty claims a broad right to use proprietary Customer Data, prompts, or confidential inputs to train external AI/ML models, risking IP leakage and trade secret loss."
+        ),
+        "suggested_mitigation": (
+            "Explicitly prohibit using Customer Data, prompts, or outputs to train, fine-tune, or evaluate any generalized or third-party AI/ML models."
+        ),
+        "consensus_replacement": (
+            "Customer retains all right, title, and interest in and to Customer Data, prompts, and outputs. Provider is strictly prohibited from using, retaining, or processing Customer Data or Confidential Information to train, fine-tune, validate, or improve any generalized or third-party artificial intelligence or machine learning models."
+        ),
     },
     {
-        "key": "auto_renewal_trap",
         "category": "Auto-Renewal Without Notice Trap",
         "severity": "MEDIUM",
-        "score": 55.0,
+        "score": 55,
         "pattern": re.compile(
-            r"(?:automatically\s+renew|auto-renew|irrevocably\s+renew)[^.]*(?:90|120|180)\s*days|automatically\s+renew\s+for\s+successive\s+(?:one|two|three|\d+)[\s-]+year\s+terms\s+unless\s+terminated",
-            re.IGNORECASE,
+            r"(?:auto-?renew|automatically\s+renew).{0,180}?(?:without\s+(?:prior\s+)?notice|unless\s+terminated\s+(?:90|120)\s+days|successive\s+(?:three|3|two|2)-?year)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Locks the enterprise into multi-year financial commitments through onerous 90+ day silent renewal windows.",
-        "suggested_mitigation": "Following the Initial Term, this Agreement shall renew only upon mutual written agreement executed at least thirty (30) days prior to expiration, with mandatory written renewal reminder sixty (60) days in advance.",
+        "legal_rationale": (
+            "Evergreen automatic renewal locks the enterprise into multi-year commitments without mandatory advance vendor notice or reasonable opt-out window."
+        ),
+        "suggested_mitigation": (
+            "Require 60-day advance written renewal reminder from Vendor and reduce Customer non-renewal notice window to 30 days."
+        ),
+        "consensus_replacement": (
+            "Following the Initial Term, this Agreement may renew for successive one (1) year periods only if Provider delivers a written renewal reminder at least sixty (60) days prior to expiration and Customer does not provide written notice of non-renewal at least thirty (30) days prior to the renewal date."
+        ),
     },
     {
-        "key": "immediate_termination_no_cure",
         "category": "Immediate Termination Without Cure Window",
         "severity": "HIGH",
-        "score": 70.0,
+        "score": 70,
         "pattern": re.compile(
-            r"(?:terminate\s+(?:this\s+agreement\s+)?immediately\s+without\s+(?:prior\s+)?(?:notice|cure)|without\s+(?:any\s+)?cure\s+(?:period|window)|immediate\s+termination\s+upon\s+any\s+suspected\s+breach)",
-            re.IGNORECASE,
+            r"terminat(?:e|ion).{0,160}?(?:immediately\s+without\s+(?:prior\s+)?(?:notice|cure)|without\s+(?:any\s+)?cure\s+(?:period|window)|at\s+its\s+sole\s+discretion\s+without\s+notice)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Eliminates operational continuity safeguards by allowing sudden cut-off of mission-critical services for minor or remediable issues.",
-        "suggested_mitigation": "Either party may terminate this Agreement for material breach only if the breaching party fails to cure such breach within thirty (30) days following receipt of written notice detailing the breach.",
+        "legal_rationale": (
+            "Grants counterparty unilateral right to terminate mission-critical services immediately without notice or opportunity to remediate alleged breaches."
+        ),
+        "suggested_mitigation": (
+            "Mandate written notice detailing the alleged breach and a thirty (30) calendar day cure window before termination takes effect."
+        ),
+        "consensus_replacement": (
+            "Either party may terminate this Agreement for material breach only if the breaching party fails to cure such breach within thirty (30) calendar days after receiving detailed written notice specifying the nature of the breach, with pro-rata refund of prepaid unearned fees upon termination for Provider breach."
+        ),
     },
     {
-        "key": "unlimited_audit_rights",
         "category": "Unlimited Audit Rights",
         "severity": "MEDIUM",
-        "score": 50.0,
+        "score": 50,
         "pattern": re.compile(
-            r"(?:audit\s+at\s+any\s+time|unannounced\s+(?:on-site\s+)?audit|unlimited\s+(?:right\s+to\s+)?audit|inspect\s+all\s+facilities\s+without\s+prior\s+notice)",
-            re.IGNORECASE,
+            r"audit.{0,180}?(?:at\s+any\s+time|unlimited\s+audit|without\s+prior\s+notice|sole\s+expense\s+of\s+(?:customer|company)|unrestricted\s+access)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Exposes operations and third-party confidential environments to disruptive, unscheduled inspections at arbitrary frequency.",
-        "suggested_mitigation": "Audits may be conducted no more than once per twelve (12) month period upon thirty (30) days advance written notice during normal business hours, subject to standard confidentiality obligations.",
+        "legal_rationale": (
+            "Permits invasive, unscheduled, unlimited on-site inspections at the company's sole cost, disrupting operations and exposing unrelated systems."
+        ),
+        "suggested_mitigation": (
+            "Restrict audits to once per 12 months with 30 days prior written notice during business hours, satisfiable via SOC 2 Type II report."
+        ),
+        "consensus_replacement": (
+            "Each party may conduct a compliance audit no more than once per twelve (12) months upon thirty (30) days advance written notice during normal business hours at the auditing party's expense; provided that delivery of an independent SOC 2 Type II or ISO 27001 attestation shall satisfy routine audit requirements."
+        ),
     },
     {
-        "key": "asymmetric_fee_shifting",
         "category": "Asymmetric Attorney Fee Shifting",
         "severity": "MEDIUM",
-        "score": 45.0,
+        "score": 45,
         "pattern": re.compile(
-            r"(?:customer\s+shall\s+(?:solely\s+)?reimburse[^.]*attorneys['’]?\s+fees|regardless\s+of\s+(?:the\s+)?outcome[^.]*(?:legal|attorneys['’]?)\s+fees|one-way\s+attorney\s+fee)",
-            re.IGNORECASE,
+            r"(?:attorneys['\u2019]?\s+fees|legal\s+fees).{0,160}?(?:solely\s+by\s+(?:customer|buyer|licensee)|only\s+(?:vendor|provider|seller)\s+shall\s+recover|shall\s+reimburse\s+(?:provider|vendor|seller)\s+regardless)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Forces the enterprise to fund counterparty legal fees even when the enterprise prevails or raises good-faith billing disputes.",
-        "suggested_mitigation": "In any formal dispute or proceeding arising out of this Agreement, the prevailing party shall be entitled to recover its reasonable outside attorneys' fees and court costs.",
+        "legal_rationale": (
+            "One-sided fee-shifting clause obligates only one party to pay all legal and collection costs even if the counterparty does not prevail."
+        ),
+        "suggested_mitigation": (
+            "Convert to bilateral prevailing-party attorney fee recovery or each party bears its own legal expenses."
+        ),
+        "consensus_replacement": (
+            "In any formal action or proceeding to enforce rights under this Agreement, the substantially prevailing party as determined by final non-appealable judgment shall be entitled to recover its reasonable outside attorneys' fees and court costs."
+        ),
     },
     {
-        "key": "non_compete_overbreadth",
         "category": "Non-Compete / Exclusivity Overbreadth",
         "severity": "HIGH",
-        "score": 80.0,
+        "score": 80,
         "pattern": re.compile(
-            r"(?:worldwide\s+exclusivity|perpetual\s+non-compete|shall\s+not\s+engage\s+with\s+any\s+competing\s+provider|exclusive\s+provider\s+globally\s+for\s+(?:five|ten|\d+)\s+years)",
-            re.IGNORECASE,
+            r"(?:non-?compet(?:e|ition)|exclusiv(?:e|ity)).{0,180}?(?:perpetual|worldwide|any\s+(?:software|technology|business)\s+whatsoever|(?:five|5|ten|10)\s+years|prohibited\s+from\s+engaging\s+any\s+other)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Unlawfully restricts enterprise procurement flexibility and creates antitrust/restraint-of-trade exposure.",
-        "suggested_mitigation": "Nothing in this Agreement creates an exclusive relationship or restricts either party from procuring or offering competing products or services, provided Confidential Information is strictly protected.",
+        "legal_rationale": (
+            "Overbroad exclusivity or multi-year worldwide non-compete restricts core business operations and risks antitrust or enforceability invalidation."
+        ),
+        "suggested_mitigation": (
+            "Narrow restrictive covenant to directly competing commercial lines for a maximum duration of twenty-four (24) months within agreed territories."
+        ),
+        "consensus_replacement": (
+            "Any non-competition or exclusivity restriction hereunder shall apply solely to directly competing product offerings within the defined commercial vertical for a period not to exceed twenty-four (24) months from Closing, and shall not restrict independent internal development or existing passive investments."
+        ),
     },
     {
-        "key": "broad_subprocessor_shield",
         "category": "Broad Data Exfiltration / Subprocessor Shield",
         "severity": "HIGH",
-        "score": 75.0,
+        "score": 75,
         "pattern": re.compile(
-            r"(?:engage\s+any\s+subprocessor\s+without\s+(?:prior\s+)?notice|no\s+liability\s+for\s+(?:acts\s+or\s+omissions\s+of\s+)?subprocessors|transfer\s+data\s+to\s+any\s+jurisdiction\s+without\s+consent)",
-            re.IGNORECASE,
+            r"(?:subprocessor|third-party\s+processor|transfer\s+personal\s+data).{0,180}?(?:without\s+(?:prior\s+)?notice|no\s+liability\s+for\s+subprocessor|shielded\s+from\s+liability|any\s+jurisdiction\s+without\s+safeguards)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Allows unchecked onward data transfers and shields the vendor from breaches caused by its own cloud subcontractors.",
-        "suggested_mitigation": "Vendor shall provide thirty (30) days advance written notice prior to authorizing any new subprocessor, permit Customer reasonable objection, and remain fully liable for all subprocessor acts and omissions.",
+        "legal_rationale": (
+            "Permits onboarding arbitrary subprocessors and cross-border data transfers without prior notice, objection rights, or flow-down liability."
+        ),
+        "suggested_mitigation": (
+            "Mandate 30-day advance written notice of new subprocessors, Customer objection rights, Standard Contractual Clauses, and full Processor flow-down liability."
+        ),
+        "consensus_replacement": (
+            "Processor shall not engage any new subprocessor or transfer Personal Data cross-border without thirty (30) days prior written notice to Customer, an opportunity for Customer to object on reasonable data-protection grounds, execution of Standard Contractual Clauses, and Processor's full primary liability for all subprocessor acts and omissions."
+        ),
     },
     {
-        "key": "liquidated_damages_trap",
         "category": "Liquidated Damages Penalty Trap",
         "severity": "HIGH",
-        "score": 70.0,
+        "score": 70,
         "pattern": re.compile(
-            r"(?:liquidated\s+damages\s+(?:equal\s+to|of)\s+(?:200%|300%|all\s+remaining\s+fees)|forfeiture\s+of\s+all\s+prepaid\s+fees|punitive\s+penalty\s+of\s+\$)",
-            re.IGNORECASE,
+            r"(?:liquidated\s+damages|early\s+termination\s+fee|penalty\s+multiplier).{0,180}?(?:100%\s+of\s+remaining|three\s+times|3x|10x|punitive|immediately\s+accelerated)",
+            re.IGNORECASE | re.DOTALL,
         ),
-        "legal_rationale": "Imposes disproportionate punitive penalties decoupled from actual demonstrable harm.",
-        "suggested_mitigation": "Any pre-agreed remedies or service credits shall be proportional to actual direct damages incurred and shall not constitute an unenforceable penalty or require forfeiture of unearned prepaid fees.",
+        "legal_rationale": (
+            "Imposes punitive liquidated damages or full contract acceleration penalties disproportionate to actual administrative harm."
+        ),
+        "suggested_mitigation": (
+            "Replace punitive fee acceleration with proportionate service credits or capped documented direct transition costs."
+        ),
+        "consensus_replacement": (
+            "In no event shall either party be subject to punitive liquidated damages or full fee acceleration upon termination for cause; any termination settlement or SLA remedy shall be limited to documented direct transition wind-down expenses or proportionate service credits capped at fifteen percent (15%) of monthly recurring fees."
+        ),
     },
 ]
 
 
-def _extract_matching_sentence(text: str, match: re.Match[str]) -> str:
-    """Expand a regex match to its enclosing sentence or clause paragraph."""
-    start = text.rfind(".", 0, match.start())
-    start = 0 if start == -1 else start + 1
-    end = text.find(".", match.end())
-    end = len(text) if end == -1 else end + 1
-    sentence = re.sub(r"\s+", " ", text[start:end]).strip()
-    if len(sentence) < 25:
-        s2 = max(0, match.start() - 60)
-        e2 = min(len(text), match.end() + 140)
-        sentence = re.sub(r"\s+", " ", text[s2:e2]).strip()
-    return sentence
+async def auditor_node(state: ContractAnalysisState) -> ContractAnalysisState:
+    """Scan contract sections against 10 enterprise risk categories and log Auditor arguments."""
+    t0 = time.time()
+    cb = state.get("progress_callback")
+    if cb:
+        await cb({"stage": "auditor", "status": "running", "message": "Auditor Agent scanning clauses for 10 risk categories..."})
 
-
-async def auditor_node(state: ContractGraphState) -> ContractGraphState:
-    """Scan contract sections against 10 enterprise risk signatures and log Auditor debate turns."""
-    start = time.time()
     sections = state.get("sections") or []
-    if not sections and state.get("raw_text"):
-        sections = [{"section_number": "1", "title": "General Terms", "text": state["raw_text"], "page_number": 1}]
-
     identified_risks: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
+    debate_transcript: list[dict[str, Any]] = list(state.get("debate_transcript") or [])
+    risk_summary = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    seen_pairs: set[tuple[str, str]] = set()
 
     for sec in sections:
         sec_num = str(sec.get("section_number", "1"))
-        sec_title = str(sec.get("title", "General"))
+        sec_title = str(sec.get("title", "Clause"))
         sec_text = str(sec.get("text", ""))
         if not sec_text.strip():
             continue
 
-        for sig in RISK_SIGNATURES:
-            if sig["key"] in seen_keys:
-                continue
-            match = sig["pattern"].search(sec_text)
+        for rule in RISK_RULES:
+            match = rule["pattern"].search(sec_text)
             if match:
-                seen_keys.add(sig["key"])
-                excerpt = _extract_matching_sentence(sec_text, match)
-                identified_risks.append(
-                    {
-                        "id": f"risk-{uuid.uuid4().hex[:8]}",
-                        "key": sig["key"],
-                        "category": sig["category"],
-                        "severity": sig["severity"],
-                        "score": sig["score"],
-                        "section_number": sec_num,
-                        "section_title": sec_title,
-                        "matched_excerpt": excerpt,
-                        "legal_rationale": sig["legal_rationale"],
-                        "suggested_mitigation": sig["suggested_mitigation"],
-                    }
-                )
+                key = (sec_num, rule["category"])
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
 
-    def _fallback_summary() -> str:
-        if not identified_risks:
-            return (
-                "Completed enterprise compliance audit across all segmented sections. "
-                "No severe risk traps matched our 10 canonical exposure signatures."
-            )
-        cats = ", ".join(f"{r['category']} (Section {r['section_number']}, {r['severity']})" for r in identified_risks)
-        return (
-            f"Enterprise Compliance Audit identified {len(identified_risks)} material exposure(s): {cats}. "
-            "Recommend immediate protective redlines prior to execution to align with corporate risk tolerances."
-        )
+                sev = rule["severity"].upper()
+                sev_key = sev.lower()
+                if sev_key in risk_summary:
+                    risk_summary[sev_key] += 1
 
-    prompt = (
-        f"Contract: {state.get('title', 'Agreement')}\n"
-        f"Playbook: {state.get('playbook_name', 'Standard Corporate Playbook')}\n"
-        f"Flagged risks ({len(identified_risks)}): "
-        + "; ".join(f"{r['category']} in Section {r['section_number']}" for r in identified_risks)
-    )
-    llm_resp = await llm_gateway.generate(
-        prompt=prompt,
-        system_prompt="You are the Enterprise Auditor Agent. Summarize flagged contract exposures concisely in 2 sentences.",
-        fallback_fn=_fallback_summary,
+                risk_id = f"risk_{uuid.uuid4().hex[:8]}"
+                finding = {
+                    "id": risk_id,
+                    "category": rule["category"],
+                    "severity": sev,
+                    "score": rule["score"],
+                    "section_number": sec_num,
+                    "section_title": sec_title,
+                    "matched_excerpt": sec_text,
+                    "legal_rationale": rule["legal_rationale"],
+                    "suggested_mitigation": rule["suggested_mitigation"],
+                    "consensus_replacement": rule["consensus_replacement"],
+                }
+                identified_risks.append(finding)
+
+    # Also invoke LLM Gateway once to synthesize an Auditor Executive Risk Opening (with zero-failure fallback)
+    risk_list_text = "\n".join(
+        f"- [Section {r['section_number']}] {r['category']} ({r['severity']}): {r['legal_rationale']}"
+        for r in identified_risks
+    ) or "No critical deviations flagged."
+
+    fallback_opening = (
+        f"Auditor Agent completed a compliance sweep across {len(sections)} contract sections "
+        f"under '{state.get('playbook_name', 'Standard Corporate Playbook')}'. "
+        f"Identified {len(identified_risks)} material risk(s): "
+        f"{risk_summary['critical']} Critical, {risk_summary['high']} High, {risk_summary['medium']} Medium. "
+        "Immediate remediation is required to cap uncapped liabilities, block AI model training on proprietary data, and restore bilateral cure protections."
     )
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-    transcript = list(state.get("debate_transcript") or [])
-    transcript.append(
+    llm_res = await llm_gateway.generate(
+        prompt=(
+            f"You are the Enterprise Auditor Agent reviewing '{state.get('title', 'Contract')}'.\n"
+            f"Detected Risks:\n{risk_list_text}\n\n"
+            "Write a concise 3-sentence legal opening statement demanding remediation."
+        ),
+        system_prompt="You are a rigorous Enterprise Legal Compliance Auditor.",
+        fallback_text=fallback_opening,
+    )
+
+    ts = datetime.now(timezone.utc).isoformat()
+    debate_transcript.append(
         {
             "agent": "Auditor Agent",
-            "role": "Enterprise Defender & Compliance Auditor",
-            "section_number": identified_risks[0]["section_number"] if identified_risks else "General",
-            "stance": "Protective / Policy Enforcement",
-            "message": llm_resp.text,
-            "timestamp": now_iso,
+            "role": "Enterprise Compliance Defender",
+            "section_number": "ALL",
+            "category": "Portfolio Risk Sweep",
+            "argument": llm_res.text,
+            "timestamp": ts,
         }
     )
-    for risk in identified_risks:
-        transcript.append(
+
+    for r in identified_risks:
+        debate_transcript.append(
             {
                 "agent": "Auditor Agent",
-                "role": "Enterprise Defender & Compliance Auditor",
-                "section_number": risk["section_number"],
-                "stance": f"Flagged {risk['severity']} Risk",
-                "message": f"[{risk['category']}] {risk['legal_rationale']}",
-                "timestamp": now_iso,
+                "role": "Enterprise Compliance Defender",
+                "section_number": r["section_number"],
+                "category": r["category"],
+                "argument": (
+                    f"[{r['severity']}] Flagged Section {r['section_number']} ({r['section_title']}): "
+                    f"{r['legal_rationale']} Recommended action: {r['suggested_mitigation']}"
+                ),
+                "timestamp": ts,
             }
         )
 
-    total_latency_ms = round((time.time() - start) * 1000.0, 2)
-    audit_records = list(state.get("audit_records") or [])
-    audit_records.append(
+    elapsed_ms = round((time.time() - t0) * 1000.0, 2)
+    audit_logs = list(state.get("audit_logs") or [])
+    audit_logs.append(
         {
             "agent_name": "Auditor Agent",
-            "action": "risk_scan_and_audit",
-            "model_name": llm_resp.model_name,
-            "prompt_tokens": llm_resp.prompt_tokens,
-            "completion_tokens": llm_resp.completion_tokens,
-            "total_tokens": llm_resp.total_tokens,
-            "latency_ms": max(total_latency_ms, llm_resp.latency_ms),
-            "estimated_cost_usd": llm_resp.estimated_cost_usd,
+            "action": "risk_audit_scan",
+            "model_name": llm_res.model,
+            "prompt_tokens": llm_res.prompt_tokens,
+            "completion_tokens": llm_res.completion_tokens,
+            "total_tokens": llm_res.total_tokens,
+            "latency_ms": max(elapsed_ms, llm_res.latency_ms),
+            "estimated_cost_usd": llm_res.estimated_cost_usd,
         }
     )
 
-    if state.get("event_emitter"):
-        await state["event_emitter"](
+    if cb:
+        await cb(
             {
-                "node": "auditor_node",
+                "stage": "auditor",
                 "status": "completed",
-                "risks_found": len(identified_risks),
+                "message": f"Auditor Agent flagged {len(identified_risks)} risks.",
             }
         )
 
     return {
         **state,
         "identified_risks": identified_risks,
-        "debate_transcript": transcript,
-        "audit_records": audit_records,
+        "risk_summary": risk_summary,
+        "debate_transcript": debate_transcript,
+        "audit_logs": audit_logs,
     }

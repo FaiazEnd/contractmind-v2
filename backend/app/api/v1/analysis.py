@@ -1,148 +1,104 @@
-"""Multi-agent analysis trigger, redline decisions, prompt rewriting, exports, Deal Room, compliance, and telemetry."""
-
+"""Analysis, Redline decisions, Prompt Rewriting, Export, Deal Room, Playbook Compliance, and Telemetry endpoints."""
 from __future__ import annotations
 
-import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional, Union
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from fastapi.responses import Response
-from sqlalchemy import delete, func, select
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.agents.llm_client import llm_gateway
-from app.api.deps import get_contract_or_404, run_pipeline_for_contract
+from app.api.deps import get_contract_or_404
 from app.database import get_db
 from app.models.audit import AuditLog
 from app.models.contract import Contract, Playbook
 from app.schemas.contract_schemas import (
-    ContractDetail,
-    DealRoomConflictRequest,
     LLMConfigRequest,
     RedlineDecisionRequest,
     RedlineRegenerateRequest,
 )
-from app.schemas.playbook_schemas import PlaybookComplianceResult
-from app.services.calendar_service import generate_ics_calendar
+from app.services.calendar_service import generate_obligations_ics
 from app.services.cross_contract_service import analyze_deal_room_conflicts
-from app.services.diff_engine import compute_diff_tokens
+from app.services.diff_engine import compute_word_diff
 from app.services.export_service import export_clean_docx, export_to_docx
+from app.services.orchestrator import run_contract_analysis
 from app.services.playbook_engine import evaluate_playbook_compliance
+from app.services.rag_engine import rag_engine
 
-router = APIRouter(prefix="/analysis", tags=["Analysis & Exports"])
+router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 # ---------------------------------------------------------------------------
-# Static routes registered before parameterized /{contract_id} routes
+# Static routes (declared before /{contract_id}/... to avoid path collisions)
 # ---------------------------------------------------------------------------
-
-
-@router.post("/deal-room/conflicts")
-async def deal_room_conflicts(
-    payload: list[str] | DealRoomConflictRequest = Body(...),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    """Run multi-document contradiction audit across selected contracts."""
-    contract_ids = payload if isinstance(payload, list) else payload.contract_ids
-    if len(contract_ids) < 2:
-        raise HTTPException(status_code=400, detail="Select at least 2 contracts for Deal Room conflict audit")
-
-    res = await db.execute(select(Contract).where(Contract.id.in_(contract_ids)))
-    contracts = list(res.scalars().all())
-    if len(contracts) < 2:
-        raise HTTPException(status_code=404, detail="At least 2 matching contracts are required")
-
-    return analyze_deal_room_conflicts(contracts)
 
 
 @router.get("/audit/summary")
-async def audit_summary(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
-    """Aggregate token, latency, and USD cost telemetry across all agent executions."""
-    totals_q = await db.execute(
-        select(
-            func.count(AuditLog.id),
-            func.coalesce(func.sum(AuditLog.prompt_tokens), 0),
-            func.coalesce(func.sum(AuditLog.completion_tokens), 0),
-            func.coalesce(func.sum(AuditLog.total_tokens), 0),
-            func.coalesce(func.sum(AuditLog.estimated_cost_usd), 0.0),
-            func.coalesce(func.avg(AuditLog.latency_ms), 0.0),
-        )
-    )
-    row = totals_q.one()
-    contract_count = (await db.execute(select(func.count(Contract.id)))).scalar_one()
+async def get_audit_summary(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """Return aggregated token, latency, cost telemetry, and recent audit logs."""
+    logs_res = await db.execute(select(AuditLog).order_by(AuditLog.timestamp.desc()))
+    logs = logs_res.scalars().all()
 
-    recent_q = await db.execute(select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(30))
-    logs = [
-        {
-            "id": l.id,
-            "contract_id": l.contract_id,
-            "agent_name": l.agent_name,
-            "action": l.action,
-            "model_name": l.model_name,
-            "prompt_tokens": l.prompt_tokens,
-            "completion_tokens": l.completion_tokens,
-            "total_tokens": l.total_tokens,
-            "latency_ms": round(float(l.latency_ms), 2),
-            "estimated_cost_usd": round(float(l.estimated_cost_usd), 6),
-            "timestamp": l.timestamp.isoformat(),
-        }
-        for l in recent_q.scalars().all()
-    ]
+    contracts_res = await db.execute(select(Contract))
+    contracts = contracts_res.scalars().all()
 
-    by_agent_q = await db.execute(
-        select(
-            AuditLog.agent_name,
-            func.count(AuditLog.id),
-            func.coalesce(func.sum(AuditLog.total_tokens), 0),
-            func.coalesce(func.avg(AuditLog.latency_ms), 0.0),
-            func.coalesce(func.sum(AuditLog.estimated_cost_usd), 0.0),
-        ).group_by(AuditLog.agent_name)
+    total_prompt = sum(l.prompt_tokens for l in logs)
+    total_completion = sum(l.completion_tokens for l in logs)
+    total_tokens = sum(l.total_tokens for l in logs)
+    total_cost = round(sum(l.estimated_cost_usd for l in logs), 6)
+    avg_latency = (
+        round(sum(l.latency_ms for l in logs) / len(logs), 2) if logs else 0.0
     )
-    by_agent = [
-        {
-            "agent_name": a,
-            "calls": int(cnt),
-            "total_tokens": int(tok),
-            "avg_latency_ms": round(float(lat), 2),
-            "cost_usd": round(float(cost), 6),
-        }
-        for a, cnt, tok, lat, cost in by_agent_q.all()
-    ]
 
     return {
-        "total_calls": int(row[0]),
-        "total_prompt_tokens": int(row[1]),
-        "total_completion_tokens": int(row[2]),
-        "total_tokens": int(row[3]),
-        "total_cost_usd": round(float(row[4]), 6),
-        "avg_latency_ms": round(float(row[5]), 2),
-        "analyzed_contracts": int(contract_count),
-        "active_provider": llm_gateway.provider,
-        "active_model": llm_gateway.model,
-        "by_agent": by_agent,
-        "recent_logs": logs,
+        "analyzed_contracts": len([c for c in contracts if c.status == "completed"]),
+        "total_contracts": len(contracts),
+        "total_runs": len(logs),
+        "total_prompt_tokens": total_prompt,
+        "total_completion_tokens": total_completion,
+        "total_tokens": total_tokens,
+        "average_latency_ms": avg_latency,
+        "total_cost_usd": total_cost,
+        "active_engine": llm_gateway.get_status()["active_model"],
+        "rag_backend": rag_engine.backend_name,
+        "recent_logs": [
+            {
+                "id": l.id,
+                "contract_id": l.contract_id,
+                "agent_name": l.agent_name,
+                "action": l.action,
+                "model_name": l.model_name,
+                "prompt_tokens": l.prompt_tokens,
+                "completion_tokens": l.completion_tokens,
+                "total_tokens": l.total_tokens,
+                "latency_ms": l.latency_ms,
+                "estimated_cost_usd": l.estimated_cost_usd,
+                "timestamp": l.timestamp.isoformat(),
+            }
+            for l in logs[:50]
+        ],
     }
 
 
 @router.delete("/audit/reset")
-async def reset_audit_logs(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
+async def reset_audit_telemetry(db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
     """Purge all audit telemetry records."""
     await db.execute(delete(AuditLog))
     await db.commit()
-    return {"status": "reset", "message": "All audit telemetry logs purged"}
+    return {"reset": True, "message": "All audit telemetry logs purged."}
 
 
 @router.get("/llm/config")
 async def get_llm_config() -> dict[str, Any]:
-    """Retrieve active LLM provider configuration and safe credential flags."""
-    return llm_gateway.get_config()
+    """Return active multi-provider LLM status and available models."""
+    return llm_gateway.get_status()
 
 
 @router.post("/llm/config")
 async def update_llm_config(payload: LLMConfigRequest) -> dict[str, Any]:
-    """Update runtime LLM provider, model, and API credentials."""
+    """Update active LLM provider, model, or session API credentials."""
     return llm_gateway.update_config(
         provider=payload.provider,
         model=payload.model,
@@ -150,51 +106,108 @@ async def update_llm_config(payload: LLMConfigRequest) -> dict[str, Any]:
         openai_api_key=payload.openai_api_key,
         anthropic_api_key=payload.anthropic_api_key,
         ollama_base_url=payload.ollama_base_url,
-        ollama_model=payload.ollama_model,
     )
 
 
+@router.post("/deal-room/conflicts")
+async def deal_room_conflicts(
+    payload: Union[list[str], dict[str, Any]] = Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Evaluate 2+ contracts for cross-contract contradictions and precedence traps."""
+    if isinstance(payload, list):
+        contract_ids = payload
+    else:
+        contract_ids = payload.get("contract_ids") or []
+
+    if len(contract_ids) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select at least 2 contracts for Deal Room cross-contract analysis.",
+        )
+
+    res = await db.execute(select(Contract).where(Contract.id.in_(contract_ids)))
+    contracts = res.scalars().all()
+    if len(contracts) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Could not find at least 2 matching contracts.",
+        )
+
+    return analyze_deal_room_conflicts(list(contracts))
+
+
 # ---------------------------------------------------------------------------
-# Contract-scoped analysis, redline decisioning, rewriting, compliance, exports
+# Contract-scoped analysis, redlines, compliance, and export routes
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{contract_id}/trigger", response_model=ContractDetail)
-async def trigger_analysis(contract_id: str, db: AsyncSession = Depends(get_db)) -> Contract:
+@router.post("/{contract_id}/trigger")
+async def trigger_analysis(
+    contract_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
     """Trigger the 4-agent StateGraph orchestrator on an uploaded contract."""
     contract = await get_contract_or_404(contract_id, db)
-    return await run_pipeline_for_contract(contract, db)
+    updated = await run_contract_analysis(db, contract)
+    return {
+        "contract_id": updated.id,
+        "status": updated.status,
+        "overall_risk_score": updated.overall_risk_score,
+        "risk_summary": updated.risk_summary,
+        "redline_count": len(updated.redlines or []),
+        "obligation_count": len(updated.obligations or []),
+    }
 
 
 @router.get("/{contract_id}/redlines")
 async def get_redlines(
     contract_id: str,
-    risk_severity: str | None = Query(default=None),
-    decision: str | None = Query(default=None),
+    risk_severity: Optional[str] = Query(None),
+    decision: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Retrieve clause redlines with optional risk_severity and decision filters."""
+    """Retrieve contract redlines with optional risk_severity and decision filters."""
     contract = await get_contract_or_404(contract_id, db)
-    all_redlines = list(contract.redlines or [])
+    all_redlines: list[dict[str, Any]] = list(contract.redlines or [])
+
+    severity_counts = {"ALL": len(all_redlines), "CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    decision_counts = {"ALL": len(all_redlines), "PENDING": 0, "ACCEPTED": 0, "REJECTED": 0}
+
+    for rl in all_redlines:
+        sev = str(rl.get("risk_severity", "MEDIUM")).upper()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+        acc = rl.get("accepted")
+        if acc is True:
+            decision_counts["ACCEPTED"] += 1
+        elif acc is False:
+            decision_counts["REJECTED"] += 1
+        else:
+            decision_counts["PENDING"] += 1
 
     filtered = all_redlines
     if risk_severity and risk_severity.upper() != "ALL":
-        sev_target = risk_severity.upper()
-        filtered = [r for r in filtered if str(r.get("risk_severity", "")).upper() == sev_target]
+        target_sev = risk_severity.upper()
+        filtered = [
+            rl for rl in filtered if str(rl.get("risk_severity", "")).upper() == target_sev
+        ]
 
     if decision and decision.upper() != "ALL":
-        dec_target = decision.upper()
-        if dec_target == "ACCEPTED":
-            filtered = [r for r in filtered if r.get("accepted") is True]
-        elif dec_target == "REJECTED":
-            filtered = [r for r in filtered if r.get("accepted") is False]
-        elif dec_target == "PENDING":
-            filtered = [r for r in filtered if r.get("accepted") is None]
+        dec = decision.upper()
+        if dec == "ACCEPTED":
+            filtered = [rl for rl in filtered if rl.get("accepted") is True]
+        elif dec == "REJECTED":
+            filtered = [rl for rl in filtered if rl.get("accepted") is False]
+        elif dec == "PENDING":
+            filtered = [rl for rl in filtered if rl.get("accepted") is None]
 
     return {
         "contract_id": contract_id,
-        "total_count": len(all_redlines),
+        "total": len(all_redlines),
         "filtered_count": len(filtered),
+        "severity_counts": severity_counts,
+        "decision_counts": decision_counts,
         "redlines": filtered,
     }
 
@@ -208,55 +221,47 @@ async def update_redline_decision(
 ) -> dict[str, Any]:
     """Accept, reject, or reset a specific clause redline decision."""
     contract = await get_contract_or_404(contract_id, db)
-    redlines = [dict(r) for r in (contract.redlines or [])]
+    redlines = [dict(rl) for rl in (contract.redlines or [])]
 
-    target_item = None
-    for item in redlines:
-        if item.get("id") == redline_id:
-            item["accepted"] = payload.accepted
-            target_item = item
+    updated_rl = None
+    for rl in redlines:
+        if rl.get("id") == redline_id:
+            rl["accepted"] = payload.accepted
+            updated_rl = rl
             break
 
-    if target_item is None:
-        raise HTTPException(status_code=404, detail=f"Redline '{redline_id}' not found")
+    if updated_rl is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Redline '{redline_id}' not found on contract '{contract_id}'",
+        )
 
     contract.redlines = redlines
-    contract.updated_at = datetime.now(timezone.utc)
     flag_modified(contract, "redlines")
     await db.commit()
     await db.refresh(contract)
-    return {"status": "updated", "redline": target_item}
+
+    return {"contract_id": contract_id, "redline": updated_rl}
 
 
-def _rewrite_clause_deterministically(original_text: str, current_suggested: str, custom_prompt: str) -> str:
-    """Produce a prompt-responsive legal clause revision when external LLMs are offline."""
-    p = custom_prompt.lower()
-    base = current_suggested or original_text
-    additions: list[str] = []
+@router.post("/{contract_id}/redlines/accept-all")
+async def accept_all_pending_redlines(
+    contract_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Accept all pending redlines in a single action."""
+    contract = await get_contract_or_404(contract_id, db)
+    redlines = [dict(rl) for rl in (contract.redlines or [])]
+    changed = 0
+    for rl in redlines:
+        if rl.get("accepted") is None:
+            rl["accepted"] = True
+            changed += 1
 
-    if "24" in p or "2x" in p or "super-cap" in p or "supercap" in p:
-        base = base.replace("twelve (12) months", "twenty-four (24) months").replace("one times (1x)", "two times (2x)")
-        additions.append("with a super-cap of two times (2x) annual fees for confirmed confidentiality or data security breaches")
-    if "mutual" in p or "reciprocal" in p:
-        if "mutually" not in base.lower() and "each party" not in base.lower():
-            additions.append("applied on a strictly mutual and reciprocal basis to both Parties")
-    if "45" in p:
-        base = base.replace("thirty (30) days", "forty-five (45) days")
-    if "60" in p:
-        base = base.replace("thirty (30) days", "sixty (60) days")
-    if "15" in p:
-        base = base.replace("thirty (30) days", "fifteen (15) days")
-    if "strict" in p or "prohibit" in p or "zero" in p or "ban" in p:
-        additions.append("with zero retention, zero secondary reuse, and mandatory audit certification upon written request")
-    if "carve" in p or "gdpr" in p or "soc2" in p:
-        additions.append("subject to full GDPR/CCPA compliance and annual SOC 2 Type II attestation")
-
-    if not additions:
-        # Incorporate custom instruction cleanly in legal drafting style
-        cleaned_instr = custom_prompt.strip().rstrip(".")
-        return f"{base.rstrip('.')} — revised per counsel instruction ({cleaned_instr})."
-
-    return f"{base.rstrip('.')}, {'; '.join(additions)}."
+    contract.redlines = redlines
+    flag_modified(contract, "redlines")
+    await db.commit()
+    return {"contract_id": contract_id, "accepted_count": changed, "redlines": redlines}
 
 
 @router.post("/{contract_id}/redlines/{redline_id}/regenerate")
@@ -266,140 +271,199 @@ async def regenerate_redline(
     payload: RedlineRegenerateRequest,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Rewrite a specific redline using a custom lawyer prompt, recompute diffs, and reset decision to pending."""
-    start = time.time()
+    """Rewrite a specific redline using lawyer's custom prompt instructions and recompute diff tokens."""
     contract = await get_contract_or_404(contract_id, db)
-    redlines = [dict(r) for r in (contract.redlines or [])]
+    redlines = [dict(rl) for rl in (contract.redlines or [])]
+    transcript = [dict(t) for t in (contract.debate_transcript or [])]
 
-    target_idx = None
-    for idx, item in enumerate(redlines):
-        if item.get("id") == redline_id:
-            target_idx = idx
+    target = None
+    for rl in redlines:
+        if rl.get("id") == redline_id:
+            target = rl
             break
 
-    if target_idx is None:
-        raise HTTPException(status_code=404, detail=f"Redline '{redline_id}' not found")
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Redline '{redline_id}' not found",
+        )
 
-    item = redlines[target_idx]
-    original_text = item.get("original_text", "")
-    current_suggested = item.get("suggested_text", "")
+    orig_text = str(target.get("original_text", ""))
+    prev_sugg = str(target.get("suggested_text", ""))
     custom_prompt = payload.custom_prompt.strip()
+    sec_num = str(target.get("section_number", "1"))
 
-    llm_resp = await llm_gateway.generate(
-        prompt=(
-            f"Original clause:\n{original_text}\n\n"
-            f"Current redline:\n{current_suggested}\n\n"
-            f"Counsel rewrite instruction:\n{custom_prompt}\n\n"
-            "Return ONLY the revised replacement clause text."
-        ),
-        system_prompt="You are an elite commercial contracts partner. Rewrite the clause strictly adhering to counsel's instruction.",
-        fallback_fn=lambda: _rewrite_clause_deterministically(original_text, current_suggested, custom_prompt),
+    precedents = rag_engine.query_knowledge_base(
+        f"{custom_prompt} {orig_text[:200]}", n_results=2
+    )
+    precedent_note = precedents[0]["text"][:240] if precedents else ""
+
+    # Deterministic fallback rewrite incorporating the lawyer's custom prompt directives
+    first_line = orig_text.splitlines()[0] if orig_text else f"Section {sec_num}"
+    fallback_rewrite = _synthesize_custom_rewrite(
+        first_line=first_line,
+        prev_sugg=prev_sugg,
+        custom_prompt=custom_prompt,
     )
 
-    new_suggested = llm_resp.text.strip()
-    new_diff_tokens = compute_diff_tokens(original_text, new_suggested)
+    llm_res = await llm_gateway.generate(
+        prompt=(
+            f"Rewrite Section {sec_num} following the lawyer's explicit instruction.\n"
+            f"Lawyer Instruction: {custom_prompt}\n"
+            f"Original Text:\n{orig_text}\n\n"
+            f"Previous Draft:\n{prev_sugg}\n\n"
+            f"Precedent Context: {precedent_note}\n\n"
+            "Return ONLY the updated clause text."
+        ),
+        system_prompt="You are Senior Legal Counsel revising contract redlines per partner instructions.",
+        fallback_text=fallback_rewrite,
+    )
 
-    item["suggested_text"] = new_suggested
-    item["diff_tokens"] = new_diff_tokens
-    item["accepted"] = None
-    item["custom_prompt"] = custom_prompt
-    item["legal_rationale"] = f"{item.get('legal_rationale', '').split(' [Custom Rewrite:')[0]} [Custom Rewrite: {custom_prompt}]"
-    redlines[target_idx] = item
+    new_suggested = llm_res.text.strip() or fallback_rewrite
+    target["suggested_text"] = new_suggested
+    target["diff_tokens"] = compute_word_diff(orig_text, new_suggested)
+    target["accepted"] = None  # Reset decision to Pending
+    target["custom_prompt"] = custom_prompt
+    target["legal_rationale"] = (
+        f"Regenerated per Counsel instruction: \"{custom_prompt}\". "
+        + (f"Precedent alignment: {precedents[0]['category']}." if precedents else "")
+    ).strip()
 
-    transcript = list(contract.debate_transcript or [])
     transcript.append(
         {
-            "agent": "Redline Synthesizer",
-            "role": "On-Demand Counsel Rewrite",
-            "section_number": item.get("section_number", "1"),
-            "stance": "Custom Prompt Regenerated",
-            "message": f"Regenerated Section {item.get('section_number', '1')} redline per counsel instruction: \"{custom_prompt}\"",
+            "agent": "Redline Synthesizer Agent",
+            "role": "Interactive Counsel Rewriter",
+            "section_number": sec_num,
+            "category": "Custom Prompt Rewrite",
+            "argument": (
+                f"Rewrote Section {sec_num} per partner directive: '{custom_prompt}'. "
+                "Decision reset to Pending for verification."
+            ),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     )
 
-    contract.redlines = redlines
-    contract.debate_transcript = transcript
-    contract.updated_at = datetime.now(timezone.utc)
-    flag_modified(contract, "redlines")
-    flag_modified(contract, "debate_transcript")
-
-    latency_ms = max(round((time.time() - start) * 1000.0, 2), llm_resp.latency_ms)
     db.add(
         AuditLog(
-            contract_id=contract.id,
-            agent_name="Redline Synthesizer",
-            action="custom_prompt_rewrite",
-            model_name=llm_resp.model_name,
-            prompt_tokens=llm_resp.prompt_tokens,
-            completion_tokens=llm_resp.completion_tokens,
-            total_tokens=llm_resp.total_tokens,
-            latency_ms=latency_ms,
-            estimated_cost_usd=llm_resp.estimated_cost_usd,
+            contract_id=contract_id,
+            agent_name="Redline Synthesizer Agent",
+            action="regenerate_custom_redline",
+            model_name=llm_res.model,
+            prompt_tokens=llm_res.prompt_tokens,
+            completion_tokens=llm_res.completion_tokens,
+            total_tokens=llm_res.total_tokens,
+            latency_ms=llm_res.latency_ms,
+            estimated_cost_usd=llm_res.estimated_cost_usd,
         )
     )
 
+    contract.redlines = redlines
+    contract.debate_transcript = transcript
+    flag_modified(contract, "redlines")
+    flag_modified(contract, "debate_transcript")
     await db.commit()
     await db.refresh(contract)
-    return {"status": "regenerated", "redline": item, "debate_transcript": contract.debate_transcript}
+
+    return {"contract_id": contract_id, "redline": target}
+
+
+def _synthesize_custom_rewrite(
+    first_line: str, prev_sugg: str, custom_prompt: str
+) -> str:
+    """Deterministic fallback rewrite reflecting common partner negotiation directives."""
+    lower = custom_prompt.lower()
+    additions: list[str] = []
+    if "2x" in lower or "two times" in lower or "cap" in lower:
+        additions.append("Aggregate liability under this clause shall be strictly capped at two times (2x) annual fees paid.")
+    if "15 day" in lower or "14 day" in lower or "cure" in lower:
+        additions.append("Any termination right requires thirty (30) days prior written notice and a cure opportunity.")
+    if "mutual" in lower or "bilateral" in lower:
+        additions.append("All obligations, waivers, and fee-shifting remedies herein shall apply mutually and symmetrically to both parties.")
+    if "delete" in lower or "ai" in lower or "train" in lower:
+        additions.append("Provider is strictly prohibited from training, fine-tuning, or evaluating any AI or ML models on Customer Data.")
+    if "delaware" in lower or "new york" in lower or "jurisdiction" in lower:
+        gov = "Delaware" if "delaware" in lower else "New York"
+        additions.append(f"This provision shall be governed exclusively by the laws of the State of {gov}.")
+
+    if not additions:
+        additions.append(
+            f"Revised per Counsel Directive ({custom_prompt}): obligations shall be mutual, commercially reasonable, capped at twelve (12) months of fees, and subject to thirty (30) days written notice."
+        )
+
+    body = prev_sugg
+    if first_line and body.startswith(first_line):
+        body_rest = body[len(first_line) :].strip()
+        return f"{first_line}\n{body_rest} {' '.join(additions)}".strip()
+    return f"{first_line}\n{' '.join(additions)}".strip()
 
 
 @router.get("/{contract_id}/export/docx")
-async def download_track_changes_docx(contract_id: str, db: AsyncSession = Depends(get_db)) -> Response:
+async def download_redlined_docx(
+    contract_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
     """Download .docx with native Word OpenXML Track Changes."""
     contract = await get_contract_or_404(contract_id, db)
     content = export_to_docx(contract)
-    safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in contract.title)[:50]
+    safe_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in contract.title)[:60]
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{safe_stem}_track_changes.docx"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title}_TrackChanges.docx"'
+        },
     )
 
 
 @router.get("/{contract_id}/export/clean")
 async def download_clean_docx(
     contract_id: str,
-    include_pending: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    """Download clean executable .docx with accepted redlines baked in and zero diff markup."""
+    """Download clean execution-ready .docx with accepted redlines baked in."""
     contract = await get_contract_or_404(contract_id, db)
-    content = export_clean_docx(contract, include_pending=include_pending)
-    safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in contract.title)[:50]
+    content = export_clean_docx(contract)
+    safe_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in contract.title)[:60]
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{safe_stem}_clean_executable.docx"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title}_CleanExecution.docx"'
+        },
     )
 
 
 @router.get("/{contract_id}/export/calendar")
-async def download_ics_calendar(contract_id: str, db: AsyncSession = Depends(get_db)) -> Response:
-    """Download RFC 5545 .ics calendar file containing all extracted obligation deadlines."""
+async def download_calendar_ics(
+    contract_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download RFC 5545 .ics calendar file containing all contract obligation deadlines."""
     contract = await get_contract_or_404(contract_id, db)
-    ics_payload = generate_ics_calendar(contract)
-    safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in contract.title)[:50]
+    ics_payload = generate_obligations_ics(contract)
+    safe_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in contract.title)[:60]
     return Response(
         content=ics_payload,
         media_type="text/calendar; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{safe_stem}_obligations.ics"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_title}_Obligations.ics"'
+        },
     )
 
 
-@router.get("/{contract_id}/compliance/playbook", response_model=PlaybookComplianceResult)
+@router.get("/{contract_id}/compliance/playbook")
 async def check_playbook_compliance(
     contract_id: str,
-    playbook_name: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-) -> PlaybookComplianceResult:
-    """Audit contract text & redlines against assigned corporate playbook and return adherence score."""
+) -> dict[str, Any]:
+    """Audit contract text and redlines against its assigned corporate Playbook."""
     contract = await get_contract_or_404(contract_id, db)
-    target_name = playbook_name or contract.playbook_name
-    pb = (await db.execute(select(Playbook).where(Playbook.name == target_name))).scalar_one_or_none()
-    if not pb:
-        pb = (await db.execute(select(Playbook).where(Playbook.is_default.is_(True)))).scalar_one_or_none()
-    if not pb:
-        raise HTTPException(status_code=404, detail="No playbook found in database")
+    pb_res = await db.execute(
+        select(Playbook).where(Playbook.name == contract.playbook_name)
+    )
+    playbook = pb_res.scalars().first()
+    if not playbook:
+        pb_res = await db.execute(select(Playbook).where(Playbook.is_default.is_(True)))
+        playbook = pb_res.scalars().first()
 
-    return evaluate_playbook_compliance(contract, pb)
+    return evaluate_playbook_compliance(contract, playbook)

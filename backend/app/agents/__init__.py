@@ -1,1 +1,1 @@
-"""Multi-Agent StateGraph package."""
+"""Agents package."""

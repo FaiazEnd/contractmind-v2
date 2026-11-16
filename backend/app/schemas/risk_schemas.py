@@ -1,55 +1,34 @@
-"""Risk, redline, diff token, and debate transcript Pydantic schemas."""
-
+"""Risk assessment and debate transcript schemas."""
 from __future__ import annotations
 
-from typing import Literal
 from pydantic import BaseModel, Field
 
 
-SeverityLevel = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-
-
-class DiffToken(BaseModel):
-    type: Literal["equal", "del", "ins"]
-    text: str
-
-
-class IdentifiedRisk(BaseModel):
+class RiskFindingSchema(BaseModel):
     id: str
     category: str
-    severity: SeverityLevel
+    severity: str
     score: float
     section_number: str
     section_title: str = ""
-    matched_excerpt: str
-    legal_rationale: str
-    suggested_mitigation: str
+    matched_excerpt: str = ""
+    legal_rationale: str = ""
+    suggested_mitigation: str = ""
 
 
-class RedlineItem(BaseModel):
-    id: str
-    section_number: str
-    original_text: str
-    suggested_text: str
-    diff_type: str = "modification"
-    risk_severity: SeverityLevel
-    legal_rationale: str
-    diff_tokens: list[DiffToken] = Field(default_factory=list)
-    accepted: bool | None = None
-    custom_prompt: str | None = None
-
-
-class DebateTurn(BaseModel):
+class DebateTurnSchema(BaseModel):
     agent: str
     role: str
-    section_number: str = "General"
-    stance: str = ""
-    message: str
+    section_number: str = ""
+    category: str = ""
+    argument: str
     timestamp: str = ""
 
 
-class RiskSummary(BaseModel):
+class RiskSummarySchema(BaseModel):
     critical: int = 0
     high: int = 0
     medium: int = 0
     low: int = 0
+    overall_risk_score: float = 0.0
+    findings: list[RiskFindingSchema] = Field(default_factory=list)

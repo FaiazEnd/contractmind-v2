@@ -1,5 +1,4 @@
-"""ContractMind v2.0 1-Click Launcher: configures directories, initializes DB, starts Uvicorn, opens browser."""
-
+"""Local 1-click launcher for ContractMind v2.0."""
 from __future__ import annotations
 
 import asyncio
@@ -13,48 +12,66 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = ROOT_DIR / "backend"
-LOG_FILE = BACKEND_DIR / "backend.log"
-
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-os.chdir(BACKEND_DIR)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-logger = logging.getLogger("contractmind.launch")
+def configure_environment() -> None:
+    os.chdir(BACKEND_DIR)
+    from app.config import settings
+
+    _ = settings.DATA_DIR
+    _ = settings.UPLOAD_DIR
+    _ = settings.CHROMA_PERSIST_DIR
 
 
-def _open_browser_when_ready() -> None:
-    time.sleep(1.8)
+def setup_logging() -> Path:
+    log_path = BACKEND_DIR / "backend.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+    return log_path
+
+
+def run_migrations() -> None:
+    from app.database import init_db
+    from app.services.rag_engine import rag_engine
+
+    asyncio.run(init_db())
+    count = rag_engine.index_knowledge_base()
+    logging.getLogger("contractmind.launcher").info(
+        "Database initialized and %d legal precedents indexed.", count
+    )
+
+
+def open_browser_delayed(url: str = "http://localhost:8000") -> None:
+    time.sleep(1.5)
     try:
-        webbrowser.open("http://localhost:8000")
-    except Exception as exc:
-        logger.warning("Could not open browser automatically: %s", exc)
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 def main() -> None:
-    from app.config import settings
-    from app.database import init_db
+    configure_environment()
+    log_path = setup_logging()
+    run_migrations()
+
+    print(f"ContractMind v2.0 starting on http://localhost:8000 (logs: {log_path})")
+    threading.Thread(target=open_browser_delayed, daemon=True).start()
+
     import uvicorn
 
-    logger.info("Initializing ContractMind v2.0 (%s)", settings.DATABASE_URL)
-    asyncio.run(init_db())
-
-    if os.environ.get("CONTRACTMIND_NO_BROWSER") != "1":
-        threading.Thread(target=_open_browser_when_ready, daemon=True).start()
-
-    logger.info("Starting Uvicorn server on http://0.0.0.0:8000")
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8000")),
+        port=8000,
+        reload=False,
         log_level="info",
     )
 

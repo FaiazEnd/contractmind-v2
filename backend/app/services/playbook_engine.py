@@ -1,147 +1,145 @@
-"""Playbook rule adherence and policy deviation scoring engine."""
-
+"""Playbook rule adherence & policy deviation scorer."""
 from __future__ import annotations
 
 from typing import Any
 
-from app.schemas.playbook_schemas import PlaybookComplianceResult, RuleComplianceItem
 
-
-_SEVERITY_WEIGHTS: dict[str, float] = {
-    "CRITICAL": 3.0,
-    "HIGH": 2.0,
-    "MEDIUM": 1.5,
-    "LOW": 1.0,
-}
-
-_CATEGORY_KEYWORDS: dict[str, list[str]] = {
-    "indemnification": ["indemnif", "hold harmless", "liability cap", "aggregate liability"],
-    "consequential": ["consequential", "indirect", "incidental", "lost profits", "punitive"],
-    "ai": ["artificial intelligence", "machine learning", "ai model", "foundation model", "customer data"],
-    "termination": ["terminate", "termination", "cure", "written notice", "material breach"],
-    "renewal": ["renew", "renewal", "auto-renew", "automatically renew", "non-renewal"],
-    "audit": ["audit", "inspect", "records", "business hours", "compliance"],
-    "subprocessor": ["subprocessor", "sub-processor", "third party", "gdpr", "dpa"],
-    "non-compete": ["non-compete", "exclusivity", "exclusive", "competing"],
-    "attorney": ["attorneys' fees", "attorney fees", "legal fees", "prevailing party"],
-    "liquidated": ["liquidated damages", "penalty", "service credit", "forfeiture"],
-}
-
-
-def _find_matching_redlines(rule: dict[str, Any], redlines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    cat_lower = rule.get("category", "").lower()
-    keywords = []
-    for key, kws in _CATEGORY_KEYWORDS.items():
-        if key in cat_lower:
-            keywords.extend(kws)
-    if not keywords:
-        keywords = [w for w in cat_lower.split() if len(w) > 3]
-
-    matches = []
-    for rl in redlines:
-        combined = " ".join(
-            [
-                str(rl.get("legal_rationale", "")),
-                str(rl.get("original_text", "")),
-                str(rl.get("suggested_text", "")),
-            ]
-        ).lower()
-        if any(kw in combined for kw in keywords):
-            matches.append(rl)
-    return matches
-
-
-def evaluate_playbook_compliance(contract: Any, playbook: Any) -> PlaybookComplianceResult:
-    """Audit contract text & arbiter redlines against assigned corporate playbook rules."""
+def evaluate_playbook_compliance(
+    contract: Any, playbook: Any | None
+) -> dict[str, Any]:
+    """Audit contract text and redline remediation against assigned corporate playbook rules."""
+    contract_id = getattr(contract, "id", "")
     raw_text = (getattr(contract, "raw_text", "") or "").lower()
-    redlines = getattr(contract, "redlines", None) or []
-    rules = getattr(playbook, "rules", None) or []
-    playbook_name = getattr(playbook, "name", None) or getattr(contract, "playbook_name", "Standard Corporate Playbook")
+    redlines: list[dict[str, Any]] = list(getattr(contract, "redlines", None) or [])
+    playbook_name = (
+        getattr(playbook, "name", None)
+        or getattr(contract, "playbook_name", "Standard Corporate Playbook")
+    )
+    rules: list[dict[str, Any]] = list(getattr(playbook, "rules", None) or [])
 
-    checklist: list[RuleComplianceItem] = []
-    total_weight = 0.0
-    earned_weight = 0.0
-    compliant_count = 0
-    remediated_count = 0
-    deviation_count = 0
+    if not rules:
+        return {
+            "contract_id": contract_id,
+            "playbook_name": playbook_name,
+            "adherence_score": 100.0,
+            "status_verdict": "STRONG COMPLIANCE",
+            "passed_rules": 0,
+            "total_rules": 0,
+            "rule_checks": [],
+        }
+
+    # Build combined remediated text from redlines (accepted or proposed)
+    remediated_texts = " ".join(
+        str(rl.get("suggested_text", "")).lower()
+        for rl in redlines
+        if rl.get("accepted") is not False
+    )
+    accepted_texts = " ".join(
+        str(rl.get("suggested_text", "")).lower()
+        for rl in redlines
+        if rl.get("accepted") is True
+    )
+
+    rule_checks: list[dict[str, Any]] = []
+    score_sum = 0.0
+    passed_count = 0
 
     for rule in rules:
-        rule_id = str(rule.get("id", ""))
-        category = str(rule.get("category", "Policy Rule"))
+        category = rule.get("category", "Policy Rule")
+        standard_req = rule.get("standard_requirement", "")
+        unacceptable = [t.lower() for t in (rule.get("unacceptable_terms") or [])]
+        preferred_fallback = rule.get("preferred_fallback", "")
         severity = str(rule.get("severity_if_missing", "HIGH")).upper()
-        std_req = str(rule.get("standard_requirement", ""))
-        unacceptable = [str(t) for t in (rule.get("unacceptable_terms") or [])]
-        fallback = str(rule.get("preferred_fallback", ""))
 
-        weight = _SEVERITY_WEIGHTS.get(severity, 1.5)
-        total_weight += weight
+        matched_violations = [term for term in unacceptable if term and term in raw_text]
 
-        matched_bad = [term for term in unacceptable if term.lower() in raw_text]
-        matching_redlines = _find_matching_redlines(rule, redlines)
-        active_redlines = [r for r in matching_redlines if r.get("accepted") is not False]
+        # Check if redlines remediate the deviation
+        category_tokens = [w for w in category.lower().split() if len(w) > 3]
+        matching_redlines = [
+            rl
+            for rl in redlines
+            if any(
+                tok in (str(rl.get("legal_rationale", "")) + " " + str(rl.get("suggested_text", ""))).lower()
+                for tok in category_tokens
+            )
+        ]
 
-        if not matched_bad:
-            # Check if standard topic is addressed or no unacceptable terms triggered
+        remediated_by_arbiter = False
+        remediated_and_accepted = False
+        if matching_redlines:
+            remediated_by_arbiter = any(
+                rl.get("accepted") is not False for rl in matching_redlines
+            )
+            remediated_and_accepted = any(
+                rl.get("accepted") is True for rl in matching_redlines
+            )
+        elif matched_violations and remediated_texts:
+            # Fallback check: suggested redline eliminates the unacceptable phrase
+            for rl in redlines:
+                if rl.get("accepted") is not False:
+                    orig_l = str(rl.get("original_text", "")).lower()
+                    sugg_l = str(rl.get("suggested_text", "")).lower()
+                    if any(v in orig_l and v not in sugg_l for v in matched_violations):
+                        remediated_by_arbiter = True
+                        if rl.get("accepted") is True:
+                            remediated_and_accepted = True
+
+        if not matched_violations:
             status = "COMPLIANT"
-            compliant_count += 1
-            earned_weight += weight
-            note = "No prohibited playbook terms detected in agreement."
-        elif active_redlines:
-            # Verify redline suggested text avoids unacceptable terms
-            remediated_clean = any(
-                not any(term.lower() in str(r.get("suggested_text", "")).lower() for term in unacceptable)
-                for r in active_redlines
-            )
-            if remediated_clean:
-                status = "REMEDIATED_BY_REDLINE"
-                remediated_count += 1
-                # Full credit if accepted, 85% credit if proposed pending acceptance
-                accepted_any = any(r.get("accepted") is True for r in active_redlines)
-                earned_weight += weight * (1.0 if accepted_any else 0.85)
-                note = (
-                    "Arbiter redline accepted and remediates policy deviation."
-                    if accepted_any
-                    else "Arbiter redline proposed to remediate policy deviation (pending acceptance)."
-                )
-            else:
-                status = "DEVIATION"
-                deviation_count += 1
-                note = "Flagged deviation not yet fully resolved by current redline text."
+            rule_score = 100.0
+            passed_count += 1
+            remediation_note = "Original text satisfies corporate playbook baseline."
+        elif remediated_and_accepted:
+            status = "REMEDIATED_ACCEPTED"
+            rule_score = 95.0
+            passed_count += 1
+            remediation_note = "Deviation flagged and remediated via accepted Arbiter redline."
+        elif remediated_by_arbiter:
+            status = "REMEDIATED_PENDING"
+            rule_score = 75.0
+            passed_count += 1
+            remediation_note = "Unacceptable term detected; Arbiter consensus redline drafted (pending lawyer acceptance)."
         else:
-            status = "DEVIATION"
-            deviation_count += 1
-            note = "Unacceptable playbook terms present without active remediation redline."
-
-        checklist.append(
-            RuleComplianceItem(
-                rule_id=rule_id,
-                category=category,
-                severity=severity,
-                standard_requirement=std_req,
-                status=status,
-                matched_unacceptable_terms=matched_bad,
-                remediation_note=note,
-                preferred_fallback=fallback,
+            status = "NON_COMPLIANT"
+            penalty = {"CRITICAL": 15.0, "HIGH": 25.0, "MEDIUM": 40.0, "LOW": 60.0}.get(
+                severity, 25.0
             )
+            rule_score = penalty
+            remediation_note = (
+                f"Detected policy violation(s): {', '.join(matched_violations)}. "
+                "Apply preferred fallback language."
+            )
+
+        score_sum += rule_score
+        rule_checks.append(
+            {
+                "category": category,
+                "standard_requirement": standard_req,
+                "severity": severity,
+                "status": status,
+                "score": rule_score,
+                "matched_violations": matched_violations,
+                "remediated": remediated_by_arbiter,
+                "remediated_accepted": remediated_and_accepted,
+                "remediation_note": remediation_note,
+                "preferred_fallback": preferred_fallback,
+            }
         )
 
-    adherence_score = round((earned_weight / total_weight) * 100.0, 1) if total_weight > 0 else 100.0
-
-    if adherence_score >= 80.0 and deviation_count == 0:
+    adherence_score = round(score_sum / len(rules), 1)
+    if adherence_score >= 80.0:
         verdict = "STRONG COMPLIANCE"
     elif adherence_score >= 55.0:
         verdict = "ACCEPTABLE WITH REDLINES"
     else:
         verdict = "HIGH DEVIATION / HIGH RISK"
 
-    return PlaybookComplianceResult(
-        contract_id=str(getattr(contract, "id", "")),
-        playbook_name=playbook_name,
-        adherence_score=adherence_score,
-        verdict=verdict,
-        total_rules=len(rules),
-        compliant_count=compliant_count,
-        remediated_count=remediated_count,
-        deviation_count=deviation_count,
-        checklist=checklist,
-    )
+    return {
+        "contract_id": contract_id,
+        "playbook_name": playbook_name,
+        "adherence_score": adherence_score,
+        "status_verdict": verdict,
+        "passed_rules": passed_count,
+        "total_rules": len(rules),
+        "rule_checks": rule_checks,
+    }

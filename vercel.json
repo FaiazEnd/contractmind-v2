@@ -1,14 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "services": {
-    "backend": {
-      "root": "backend",
-      "framework": "fastapi",
-      "entrypoint": "app/main.py"
-    },
     "frontend": {
       "root": "frontend",
-      "framework": "nextjs",
       "bindings": [
         {
           "type": "service",
@@ -17,38 +11,28 @@
           "env": "BACKEND_URL"
         }
       ]
+    },
+    "backend": {
+      "root": "backend",
+      "entrypoint": "app.main:app"
     }
   },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": { "service": "backend" }
     },
     {
-      "source": "/mcp",
-      "destination": {
-        "service": "backend"
-      }
-    },
-    {
-      "source": "/mcp/(.*)",
-      "destination": {
-        "service": "backend"
-      }
+      "source": "/mcp(.*)",
+      "destination": { "service": "backend" }
     },
     {
       "source": "/health",
-      "destination": {
-        "service": "backend"
-      }
+      "destination": { "service": "backend" }
     },
     {
       "source": "/(.*)",
-      "destination": {
-        "service": "frontend"
-      }
+      "destination": { "service": "frontend" }
     }
   ]
 }

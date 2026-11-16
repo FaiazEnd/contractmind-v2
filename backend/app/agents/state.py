@@ -1,22 +1,23 @@
-"""Shared StateGraph state schema for the 4-agent ContractMind negotiation pipeline."""
-
+"""Shared StateGraph state definition for ContractMind multi-agent pipeline."""
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, TypedDict
+from typing import Any, Callable, Coroutine, TypedDict
 
 
-class ContractGraphState(TypedDict, total=False):
+class ContractAnalysisState(TypedDict, total=False):
     contract_id: str
     title: str
     raw_text: str
+    sections: list[dict[str, Any]]
     playbook_name: str
     playbook_rules: list[dict[str, Any]]
-    sections: list[dict[str, Any]]
+
     identified_risks: list[dict[str, Any]]
     debate_transcript: list[dict[str, Any]]
     redlines: list[dict[str, Any]]
     obligations: list[dict[str, Any]]
-    overall_risk_score: float
     risk_summary: dict[str, int]
-    audit_records: list[dict[str, Any]]
-    event_emitter: Callable[[dict[str, Any]], Awaitable[None]] | None
+    overall_risk_score: float
+
+    audit_logs: list[dict[str, Any]]
+    progress_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None

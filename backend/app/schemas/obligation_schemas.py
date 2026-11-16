@@ -1,11 +1,10 @@
-"""Obligation extraction schemas."""
-
+"""Structured obligation matrix schemas."""
 from __future__ import annotations
 
 from pydantic import BaseModel
 
 
-class ObligationItem(BaseModel):
+class ObligationSchema(BaseModel):
     clause_reference: str
     obligation_type: str
     obligor: str
@@ -13,4 +12,4 @@ class ObligationItem(BaseModel):
     description: str
     due_date_or_trigger: str
     recurrence: str = "One-time"
-    penalty_for_breach: str = "Material breach / contractual remedies"
+    penalty_for_breach: str = "Standard breach remedies"

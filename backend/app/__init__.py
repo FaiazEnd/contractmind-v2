@@ -1,1 +1,1 @@
-"""ContractMind v2.0 Backend Application Package."""
+"""ContractMind v2.0 Application Package."""

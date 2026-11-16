@@ -1,1 +1,1 @@
-"""MCP Server package."""
+"""Model Context Protocol (MCP) server package."""

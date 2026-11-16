@@ -1,34 +1,25 @@
-"""ContractMind v2.0 FastAPI Entrypoint with Lifespan DB Initialization, API Routers, MCP Gateway & Studio SPA."""
-
+"""ContractMind v2.0 FastAPI application entrypoint."""
 from __future__ import annotations
 
-import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import AsyncGenerator
-
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
 
 from app.api.v1 import analysis, auth, contracts, copilot, playbook, stream
 from app.config import settings
-from app.database import ensure_db_initialized
-from app.mcp_server.fastserver import mcp_router
-
-STATIC_DIR = BACKEND_DIR / "static"
-INDEX_HTML = STATIC_DIR / "index.html"
+from app.database import init_db
+from app.mcp_server.fastserver import router as mcp_router
+from app.services.rag_engine import rag_engine
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
-    """Initialize SQLite schema and default playbooks on startup."""
-    await ensure_db_initialized()
+    """Initialize SQLite schema, default playbooks, and 2,000 SEC EDGAR precedents."""
+    await init_db()
+    rag_engine.index_knowledge_base()
     yield
 
 
@@ -55,23 +46,21 @@ app.include_router(playbook.router, prefix="/api/v1")
 app.include_router(stream.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
 
-# Model Context Protocol (MCP) Gateway
+# Model Context Protocol (MCP) Server
 app.include_router(mcp_router)
-
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/health")
-async def health_check() -> JSONResponse:
-    """Service health probe."""
-    return JSONResponse({"status": "healthy", "version": "2.0.0"})
+async def health_check() -> dict[str, str]:
+    return {"status": "healthy", "version": settings.APP_VERSION}
 
 
-@app.get("/", include_in_schema=False)
-@app.get("/studio", include_in_schema=False)
-async def serve_studio() -> FileResponse:
-    """Serve the Warm Editorial Neo-Legal Studio v2.1 Single-Page Application."""
-    if not INDEX_HTML.exists():
-        return JSONResponse({"error": "Frontend index.html not found"}, status_code=404)  # type: ignore[return-value]
-    return FileResponse(str(INDEX_HTML), media_type="text/html")
+@app.get("/", response_model=None)
+@app.get("/studio", response_model=None)
+async def serve_studio() -> FileResponse | HTMLResponse:
+    index_path = settings.STATIC_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return HTMLResponse(
+        "<h1>ContractMind v2.0</h1><p>Studio frontend not found at backend/static/index.html.</p>"
+    )

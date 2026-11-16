@@ -1,164 +1,221 @@
-"""PDF ingestion, PyMuPDF table extraction, PII redaction, and section segmentation."""
-
+"""PDF ingestion, PyMuPDF table extraction to Markdown, PII redaction, and section segmentation."""
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
 from typing import Any
-import pymupdf as fitz
+
+import fitz  # PyMuPDF
 
 
-# Ordered carefully so hyphenated/16-digit IDs are classified accurately before generic 8-17 digit bank accounts
-_SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-_CC_PATTERN = re.compile(r"\b(?:\d{4}[ -]?){3}\d{4}\b")
-_EIN_PATTERN = re.compile(r"\b\d{2}-\d{7}\b")
-_BANK_ACCT_PATTERN = re.compile(r"\b\d{8,17}\b")
+# Ordered carefully so hyphenated/formatted patterns match before generic digit sequences
+SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+EIN_PATTERN = re.compile(r"\b\d{2}-\d{7}\b")
+CREDIT_CARD_PATTERN = re.compile(r"\b(?:\d{4}[ -]?){3}\d{4}\b")
+BANK_ACCT_PATTERN = re.compile(r"\b\d{8,17}\b")
 
-_SECTION_HEADER_PATTERN = re.compile(
-    r"^\s*(?:(Section|Article)\s+(\d+(?:\.\d+)*)[.:\-\s]*(.*)|(\d+(?:\.\d+)*)\.\s+([A-Z][^\n]{1,120}))\s*$",
-    re.IGNORECASE,
+SECTION_HEADER_PATTERN = re.compile(
+    r"^\s*(?:(?P<prefix>Section|Article|SECTION|ARTICLE)\s+(?P<num1>[IVXLCDM]+|\d+(?:\.\d+)*)|(?P<num2>\d+(?:\.\d+)+|\d+\.))\s*(?:[:.\-\u2013\u2014]?\s*(?P<title>[A-Za-z][^\n]{1,100}))?$",
+    re.MULTILINE,
 )
 
 
 def redact_pii(text: str) -> str:
-    """Redact SSNs, credit cards, EINs, and bank account numbers before embedding/storage."""
+    """Redact US SSNs, EINs, credit card numbers, and bank account numbers."""
     if not text:
         return ""
-    redacted = _SSN_PATTERN.sub("[REDACTED_SSN]", text)
-    redacted = _CC_PATTERN.sub("[REDACTED_CC]", redacted)
-    redacted = _EIN_PATTERN.sub("[REDACTED_EIN]", redacted)
-    redacted = _BANK_ACCT_PATTERN.sub("[REDACTED_BANK_ACCT]", redacted)
+    redacted = SSN_PATTERN.sub("[REDACTED_SSN]", text)
+    redacted = EIN_PATTERN.sub("[REDACTED_EIN]", redacted)
+    redacted = CREDIT_CARD_PATTERN.sub("[REDACTED_CC]", redacted)
+    redacted = BANK_ACCT_PATTERN.sub("[REDACTED_BANK_ACCT]", redacted)
     return redacted
 
 
-def _clean_cell(cell: Any) -> str:
-    if cell is None:
+def _format_table_markdown(rows: list[list[Any]]) -> str:
+    """Convert extracted table rows into a valid GitHub Flavored Markdown table."""
+    if not rows:
         return ""
-    return re.sub(r"\s+", " ", str(cell)).strip().replace("|", "\\|")
-
-
-def extract_tables_as_markdown(page: fitz.Page) -> list[str]:
-    """Extract tables from a PyMuPDF page and format each as a GitHub Markdown table."""
-    markdown_tables: list[str] = []
-    try:
-        finder = page.find_tables()
-        tables = getattr(finder, "tables", finder) or []
-    except Exception:
-        return markdown_tables
-
-    for table in tables:
-        try:
-            rows = table.extract()
-        except Exception:
-            continue
-        if not rows or len(rows) < 1:
-            continue
-
-        cleaned_rows = [[_clean_cell(c) for c in row] for row in rows if any(c is not None and str(c).strip() for c in row)]
-        if not cleaned_rows:
-            continue
-
-        col_count = max(len(r) for r in cleaned_rows)
-        normalized_rows = [r + [""] * (col_count - len(r)) for r in cleaned_rows]
-        header = normalized_rows[0]
-        separator = ["---"] * col_count
-        body = normalized_rows[1:]
-
-        lines = [
-            "| " + " | ".join(header) + " |",
-            "| " + " | ".join(separator) + " |",
+    cleaned_rows: list[list[str]] = []
+    max_cols = 0
+    for row in rows:
+        cells = [
+            " ".join(str(cell or "").split()).replace("|", "\\|") for cell in row
         ]
-        for row in body:
-            lines.append("| " + " | ".join(row) + " |")
-        markdown_tables.append("\n".join(lines))
+        if any(cells):
+            cleaned_rows.append(cells)
+            max_cols = max(max_cols, len(cells))
 
-    return markdown_tables
+    if not cleaned_rows or max_cols == 0:
+        return ""
+
+    # Pad rows to uniform width
+    normalized = [r + [""] * (max_cols - len(r)) for r in cleaned_rows]
+    header = normalized[0]
+    separator = ["---"] * max_cols
+    body = normalized[1:] if len(normalized) > 1 else []
+
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(separator) + " |",
+    ]
+    for row in body:
+        lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
 
 
-def segment_sections(pages: list[tuple[int, str]]) -> tuple[str, list[dict[str, Any]]]:
-    """Segment redacted page text into structured legal sections."""
-    sections: list[dict[str, Any]] = []
-    current_num = "0"
-    current_title = "Preamble & Parties"
-    current_page = pages[0][0] if pages else 1
-    current_lines: list[str] = []
-    all_page_texts: list[str] = []
+def extract_pdf_pages(file_bytes: bytes) -> list[dict[str, Any]]:
+    """Extract text and Markdown tables from each page of a PDF using PyMuPDF."""
+    pages_data: list[dict[str, Any]] = []
+    with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+        for idx, page in enumerate(doc, start=1):
+            page_text = page.get_text("text") or ""
+            markdown_tables: list[str] = []
+            try:
+                tables = page.find_tables()
+                if tables and getattr(tables, "tables", None):
+                    for tbl in tables.tables:
+                        extracted = tbl.extract()
+                        md = _format_table_markdown(extracted)
+                        if md:
+                            markdown_tables.append(md)
+            except Exception:
+                # Some PDF versions/pages may not yield structured tables cleanly
+                markdown_tables = []
 
-    def _flush() -> None:
-        body = "\n".join(current_lines).strip()
-        if body:
-            sections.append(
+            combined = page_text.strip()
+            if markdown_tables:
+                combined = (
+                    combined
+                    + "\n\n"
+                    + "\n\n".join(markdown_tables)
+                ).strip()
+
+            pages_data.append(
                 {
-                    "section_number": current_num,
-                    "title": current_title,
-                    "text": body,
-                    "page_number": current_page,
+                    "page_number": idx,
+                    "text": redact_pii(combined),
+                    "tables": markdown_tables,
                 }
             )
+    return pages_data
 
-    for page_num, page_text in pages:
-        if not page_text.strip():
+
+def segment_sections(
+    pages_data: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Segment extracted text into structured clauses matching Section X, Article X, or numeric headers."""
+    full_text = "\n\n".join(p["text"] for p in pages_data if p.get("text")).strip()
+    if not full_text:
+        return "", []
+
+    # Build character offset -> page number map
+    page_offsets: list[tuple[int, int, int]] = []
+    cursor = 0
+    for p in pages_data:
+        txt = p.get("text") or ""
+        if not txt:
             continue
-        all_page_texts.append(page_text.strip())
-        for line in page_text.splitlines():
-            match = _SECTION_HEADER_PATTERN.match(line)
-            if match:
-                _flush()
-                current_lines = []
-                current_page = page_num
-                if match.group(2):
-                    current_num = match.group(2).strip()
-                    current_title = (match.group(3) or f"Section {current_num}").strip(" .:-") or f"Section {current_num}"
-                else:
-                    current_num = match.group(4).strip()
-                    current_title = (match.group(5) or f"Section {current_num}").strip(" .:-")
-            else:
-                current_lines.append(line)
+        start = cursor
+        end = start + len(txt)
+        page_offsets.append((start, end, p["page_number"]))
+        cursor = end + 2  # "\n\n"
 
-    _flush()
+    def _page_for_offset(pos: int) -> int:
+        for start, end, pnum in page_offsets:
+            if start <= pos <= end:
+                return pnum
+        return page_offsets[-1][2] if page_offsets else 1
 
-    if not sections and all_page_texts:
-        full = "\n\n".join(all_page_texts)
+    matches = list(SECTION_HEADER_PATTERN.finditer(full_text))
+    sections: list[dict[str, Any]] = []
+
+    if not matches:
         sections.append(
             {
                 "section_number": "1",
-                "title": "General Terms",
-                "text": full,
+                "title": "Agreement Terms",
+                "text": full_text,
+                "page_number": 1,
+            }
+        )
+        return full_text, sections
+
+    # Include preamble before first header if meaningful
+    first_start = matches[0].start()
+    preamble = full_text[:first_start].strip()
+    if len(preamble) > 40:
+        sections.append(
+            {
+                "section_number": "0",
+                "title": "Preamble & Parties",
+                "text": preamble,
                 "page_number": 1,
             }
         )
 
-    raw_text = "\n\n".join(all_page_texts).strip()
-    return raw_text, sections
+    for i, m in enumerate(matches):
+        raw_num = (m.group("num1") or m.group("num2") or str(i + 1)).rstrip(".")
+        title = (m.group("title") or "").strip()
+        if not title:
+            title = f"Clause {raw_num}"
+
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
+        body = full_text[body_start:body_end].strip()
+        header_line = m.group(0).strip()
+        section_text = f"{header_line}\n{body}".strip() if body else header_line
+
+        sections.append(
+            {
+                "section_number": raw_num,
+                "title": title,
+                "text": section_text,
+                "page_number": _page_for_offset(m.start()),
+            }
+        )
+
+    return full_text, sections
 
 
-def process_pdf_document(doc: fitz.Document) -> tuple[str, list[dict[str, Any]]]:
-    """Extract text and Markdown tables from an open PyMuPDF document, then redact PII and segment."""
-    pages: list[tuple[int, str]] = []
-    for idx, page in enumerate(doc, start=1):
-        text = page.get_text("text") or ""
-        tables_md = extract_tables_as_markdown(page)
-        combined = text.strip()
-        if tables_md:
-            combined = f"{combined}\n\n" + "\n\n".join(tables_md)
-        redacted = redact_pii(combined)
-        pages.append((idx, redacted))
-    return segment_sections(pages)
+def process_document_bytes(
+    file_bytes: bytes, filename: str
+) -> dict[str, Any]:
+    """Process uploaded PDF, DOCX, or plain text bytes into redacted text and structured sections."""
+    ext = Path(filename).suffix.lower()
+    if ext == ".pdf":
+        pages_data = extract_pdf_pages(file_bytes)
+    elif ext == ".docx":
+        import docx
+
+        doc = docx.Document(io.BytesIO(file_bytes))
+        parts: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            rows = [[cell.text for cell in row.cells] for row in table.rows]
+            md = _format_table_markdown(rows)
+            if md:
+                parts.append(md)
+        text = redact_pii("\n\n".join(parts))
+        pages_data = [{"page_number": 1, "text": text, "tables": []}]
+    else:
+        decoded = file_bytes.decode("utf-8", errors="replace")
+        pages_data = [{"page_number": 1, "text": redact_pii(decoded), "tables": []}]
+
+    raw_text, sections = segment_sections(pages_data)
+    return {
+        "raw_text": raw_text,
+        "sections": sections,
+        "page_count": len(pages_data),
+    }
 
 
-def process_pdf(file_path: str | Path) -> tuple[str, list[dict[str, Any]]]:
-    """Open a PDF file on disk and return (raw_text, sections)."""
-    with fitz.open(str(file_path)) as doc:
-        return process_pdf_document(doc)
-
-
-def process_pdf_bytes(data: bytes) -> tuple[str, list[dict[str, Any]]]:
-    """Open PDF bytes in memory and return (raw_text, sections)."""
-    with fitz.open(stream=data, filetype="pdf") as doc:
-        return process_pdf_document(doc)
-
-
-def process_text(text: str) -> tuple[str, list[dict[str, Any]]]:
-    """Redact PII and segment plain-text contract input."""
-    redacted = redact_pii(text)
-    return segment_sections([(1, redacted)])
+def process_raw_text(text: str) -> dict[str, Any]:
+    """Process plain contract text (used for demo benchmarks) through PII redaction & segmentation."""
+    clean = redact_pii(text)
+    pages_data = [{"page_number": 1, "text": clean, "tables": []}]
+    raw_text, sections = segment_sections(pages_data)
+    return {
+        "raw_text": raw_text,
+        "sections": sections,
+        "page_count": 1,
+    }
