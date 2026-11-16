@@ -194,7 +194,9 @@ class RAGEngine:
         if not entries:
             return []
 
-        q_vec = _term_frequency(_tokenize(query))
+        idf = getattr(self, "_kb_idf", {})
+        q_tf = _term_frequency(_tokenize(query))
+        q_vec = {tok: val * idf.get(tok, 1.0) for tok, val in q_tf.items()}
         scored = []
         for entry in entries:
             score = _cosine_similarity(q_vec, entry["vector"])
@@ -220,16 +222,19 @@ class RAGEngine:
                 pass
 
     def index_knowledge_base(self) -> int:
-        """Index the curated external CUAD-style legal precedent dataset into a shared RAG store."""
+        """Index the 2,000 SEC EDGAR / LexGLUE LEDGAR legal precedent clauses into a shared RAG store."""
         kb_id = "__external_knowledge_base__"
         entries: list[dict[str, Any]] = []
         for item in LEGAL_PRECEDENT_DATASET:
-            full_text = (
-                f"[{item['source']} — {item['category']}] "
-                f"Risk: {item['risk_pattern']} "
-                f"Market Standard Fallback: {item['market_standard_fallback']} "
-                f"Guidance: {item['guidance']}"
-            )
+            rp = str(item.get("risk_pattern", "")).strip()
+            msf = str(item.get("market_standard_fallback", "")).strip()
+            if rp == msf:
+                full_text = f"[{item['source']} — {item['category']}] {rp}"
+            else:
+                full_text = (
+                    f"[{item['source']} — {item['category']}] "
+                    f"Risk: {rp} Fallback: {msf} Guidance: {item.get('guidance', '')}"
+                )
             entries.append(
                 {
                     "id": item["id"],
@@ -256,11 +261,25 @@ class RAGEngine:
             except Exception:
                 self._using_chroma = False
 
-        self._memory_store[kb_id] = [
-            {**e, "vector": _term_frequency(_tokenize(e["text"]))}
-            for e in entries
-        ]
-        return len(entries)
+        # Compute TF-IDF vectors so domain-specific legal terms rank accurately across 2,000 clauses
+        tokenized = [_tokenize(e["text"]) for e in entries]
+        doc_freq: Counter[str] = Counter()
+        for toks in tokenized:
+            for tok in set(toks):
+                doc_freq[tok] += 1
+        n_docs = float(len(entries) or 1)
+        self._kb_idf: dict[str, float] = {
+            tok: math.log((n_docs + 1.0) / (df + 1.0)) + 1.0
+            for tok, df in doc_freq.items()
+        }
+
+        stored = []
+        for e, toks in zip(entries, tokenized):
+            tf = _term_frequency(toks)
+            tfidf = {tok: val * self._kb_idf.get(tok, 1.0) for tok, val in tf.items()}
+            stored.append({**e, "vector": tfidf})
+        self._memory_store[kb_id] = stored
+        return len(stored)
 
     def query_knowledge_base(self, query: str, n_results: int = 2) -> list[dict[str, Any]]:
         """Retrieve top matching external legal precedents & market-standard fallbacks."""
@@ -293,7 +312,9 @@ class RAGEngine:
             self.index_knowledge_base()
             entries = self._memory_store.get("__external_knowledge_base__", [])
 
-        q_vec = _term_frequency(_tokenize(query))
+        idf = getattr(self, "_kb_idf", {})
+        q_tf = _term_frequency(_tokenize(query))
+        q_vec = {tok: val * idf.get(tok, 1.0) for tok, val in q_tf.items()}
         scored = [
             {
                 "text": entry["text"],

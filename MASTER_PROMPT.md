@@ -185,15 +185,18 @@ Implement in `backend/app/services/pdf_processor.py`:
   - Return clean `raw_text` and structured `sections` list.
 
 ================================================================================
-5. CONTEXTUAL RAG & SEMANTIC CHUNKING ENGINE
+5. CONTEXTUAL RAG & EXTERNAL SEC EDGAR PRECEDENT ENGINE
 ================================================================================
-Implement in `backend/app/services/rag_engine.py`:
+Implement in `backend/app/services/rag_engine.py` and `backend/app/services/legal_knowledge_base.py`:
 - Use persistent `chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)`.
 - Chunking: Slide chunk window of 600 characters with 100 character overlap.
 - Prepend section metadata to chunk text: `[Section {num}: {title}] {text}`.
+- External Precedent Knowledge Base (`legal_precedents_2000.json`):
+  - Indexes **2,000 real commercial contract clauses** from **SEC EDGAR / LexGLUE LEDGAR** (`coastalcph/lex_glue`, `ledgar` split across 99 legal categories) into a shared RAG store on startup (`index_knowledge_base()`).
+  - Method `query_knowledge_base(query, n_results=2)` retrieves relevant SEC EDGAR precedent clauses for both the Redline Synthesizer Agent and Grounded Legal AI Copilot.
 - Fallback in-memory vector store:
   - If ChromaDB fails to initialize, gracefully fall back to TF-IDF / term-frequency cosine similarity vector store.
-- Method `query_similar(contract_id, query, n_results=4)`: Returns top matching contextual passages.
+- Method `query_similar(contract_id, query, n_results=4)`: Returns top matching contextual passages from the target contract.
 
 ================================================================================
 6. MULTI-AGENT STATEGRAPH PIPELINE
@@ -408,7 +411,7 @@ Ensure the completed codebase satisfies all criteria:
 7. [x] DOCX export reflects Accept / Reject decisions in summary table and detailed clause headings.
 8. [x] Clean DOCX export bakes in accepted redlines without markup tags for execution.
 9. [x] RFC 5545 iCalendar (.ics) generation exports obligation milestones directly to Google/Apple Calendar.
-10. [x] In-studio Legal AI Copilot answers contract inquiries with precise clause citations.
+10. [x] In-studio Legal AI Copilot answers contract inquiries with precise clause citations and 2,000 SEC EDGAR / LexGLUE LEDGAR legal precedents.
 11. [x] Deal Room multi-document conflict analyzer detects contradictions across related agreements.
 12. [x] Playbook compliance engine computes quantified adherence score (0-100%) and remediation audit.
 13. [x] Synchronized dual-pane canvas displays original text alongside consensus redlines.

@@ -10,6 +10,7 @@ from typing import Any
 from app.agents.llm_client import llm_gateway
 from app.agents.state import ContractGraphState
 from app.services.diff_engine import compute_diff_tokens
+from app.services.rag_engine import rag_engine
 
 
 async def redline_node(state: ContractGraphState) -> ContractGraphState:
@@ -58,8 +59,15 @@ async def redline_node(state: ContractGraphState) -> ContractGraphState:
             f"consensus clause modification(s). Composite Risk Severity scored at {overall_score}/100."
         )
 
+    risk_categories_query = " ".join(str(r.get("category", "")) for r in risks[:4])
+    precedents = rag_engine.query_knowledge_base(risk_categories_query, n_results=2) if risk_categories_query.strip() else []
+    precedent_note = " | ".join(f"{p['category']}: {p['text'][:180]}" for p in precedents)
+
     llm_resp = await llm_gateway.generate(
-        prompt=f"Synthesize arbiter summary for {len(redlines)} redlines with composite risk score {overall_score}/100.",
+        prompt=(
+            f"Synthesize arbiter summary for {len(redlines)} redlines with composite risk score {overall_score}/100.\n"
+            f"Reference SEC EDGAR precedents: {precedent_note}"
+        ),
         system_prompt="You are the Redline Synthesizer Arbiter. State the consensus resolution concisely in 2 sentences.",
         fallback_fn=_fallback_arbiter,
     )
