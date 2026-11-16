@@ -55,7 +55,10 @@ def test_rag_index_query_and_delete_purge() -> None:
 
 
 def test_rag_external_knowledge_base_retrieval() -> None:
+    from app.services.legal_knowledge_base import LEGAL_PRECEDENT_DATASET
+
+    assert len(LEGAL_PRECEDENT_DATASET) >= 2000
     engine = RAGEngine()
-    kb_hits = engine.query_knowledge_base("AI model training on customer data", n_results=2)
+    kb_hits = engine.query_knowledge_base("indemnification and governing law", n_results=2)
     assert len(kb_hits) >= 1
-    assert any("AI" in h["category"] for h in kb_hits)
+    assert kb_hits[0]["source"] == "SEC EDGAR / LexGLUE LEDGAR"
