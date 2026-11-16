@@ -229,12 +229,13 @@ Four persona nodes running sequentially through a shared `StateGraph`:
 7. MULTI-PROVIDER LLM GATEWAY & FALLBACK SIMULATOR
 ================================================================================
 Implement in `backend/app/agents/llm_client.py`:
+- Default Engine: Google Gemini (`DEFAULT_LLM_PROVIDER=gemini`, `DEFAULT_LLM_MODEL=gemini-2.5-flash`) configured via `GEMINI_API_KEY` environment variable (never hardcoded in tracked files).
 - Supported Providers:
-  1. Google Gemini: `gemini-3.5-flash-lite`, `gemini-1.5-flash` via `google-generativeai`.
+  1. Google Gemini: `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-pro` via Gemini REST API (`generativelanguage.googleapis.com`).
   2. Local Ollama: `http://localhost:11434/api/generate` with `qwen3.5:4b`, `llama3.2`, etc.
   3. OpenAI: `gpt-4o`, `gpt-4o-mini`.
   4. Anthropic: `claude-3-5-sonnet`.
-- Automatic Fallback: If chosen provider fails or is offline, automatically falls back to secondary provider or built-in deterministic legal simulation templates with zero disruption.
+- Automatic Fallback: If chosen provider has no key configured, fails, or is offline, automatically falls back to secondary provider or built-in deterministic legal simulation templates with zero disruption.
 
 ================================================================================
 8. WORD (.DOCX) OPENXML TRACK CHANGES & CLEAN EXECUTABLE EXPORT ENGINE
@@ -364,19 +365,20 @@ Implement in `backend/static/index.html` (and sync to `frontend/public/index.htm
   - Primary Terracotta / Cognac accent (`brand-600: #8E5333`, hover `brand-700: #754227`, tint `brand-50: #F6EFEA`, border `brand-200: #DBC7B8`).
   - Deep Espresso Charcoal anchor (`ink-900: #1D1A18`, `ink-800: #2A2522`, muted stone `ink-500: #78716C`) for hero promo card, active segmented tabs, and active floating dock square highlights.
   - Preserved semantic diff tokens (`diff-ins` emerald `#059669`, `diff-del` crimson `#DC2626`) and provider status dots harmonized on warm linen surfaces.
-- **Home & Ingestion Workspace**:
-  - Top bar with drawer menu toggle, `ContractMind v2.0` branding, pill view switcher (`Ingestion Studio` | `Telemetry & Audits`), live model status indicator, and settings avatar ring.
+- **Home & Guided Onboarding Workspace**:
+  - Top bar with hamburger button opening a **left slide-over navigation drawer** (sliding smoothly from the left on mobile & desktop with clear action descriptions: Upload/Start, Active Contract Studio, Deal Room Compare, Telemetry, AI Engine Settings, and Guided Tour), `ContractMind v2.0` branding, pill view switcher (`Ingestion Studio` | `Telemetry & Audits`), live Gemini engine status pill, and settings avatar ring.
   - Editorial display headline (`Review & negotiate contracts with multi-agent precision`) paired with reactive search input (`searchQuery` filtering analyzed contracts via `filteredContracts`) and a square Terracotta (`#8E5333`) filter toggle button (`showHomeFilters`).
-  - Dark Espresso Hero Feature Card (`bg-ink-900`, `rounded-[28px]`) highlighting 4-Agent StateGraph speed with a crisp pure-white pill CTA (`Run Quick Audit`) and PDF upload jump link, plus 3 minimal workflow tiles.
-  - AI Agent Models selector + Terracotta Engine Analytics donut gauge (`#tour-models`, `#tour-analytics`), PDF ingestion dropzone & Playbook cards (`#tour-ingestion`), and 6 Benchmark Deal Templates (`#tour-benchmarks`) with horizontal category pill filters (`All | M&A & IP | Cloud & SaaS | MSA & NDA` with Terracotta active state).
+  - Dark Espresso Hero Feature Card (`bg-ink-900`, `rounded-[28px]`) with a crisp pure-white pill CTA (`Run 1-Click Sample Audit`), PDF upload jump link, and a crystal-clear **"How It Works in 3 Steps"** workflow strip (1. Add Contract → 2. Review & Decide Redlines → 3. Export & Compare).
+  - Guided Primary Action Flow: **Step 1: Upload Your Contract & Pick Rules** (`#tour-ingestion` dropzone + plain-English Playbook cards), **Step 2: Or Try a 1-Click Sample Deal** (`#tour-benchmarks` 6 Benchmark Deal Templates with horizontal category pill filters `All | M&A & IP | Cloud & SaaS | MSA & NDA`), followed by **Your Reviewed Contracts** (with Deal Room comparison hint) and compact **AI Engine & Portfolio Analytics** (`#tour-models`, `#tour-analytics`).
+  - Live 4-Agent Progress Overlay displayed while contracts are being analyzed so first-time users see real-time step feedback.
 - **Contract Studio View**:
-  - Boutique detail header with circular `<` back button, centered `"Contract Studio"` label, Deal Room shortcut, warm linen Summary Showcase (`Risk Severity X/100`, accepted count badge), and full Terracotta CTA (`Export Track Changes (.DOCX)`).
-  - Espresso Pill Segmented Tabs (`bg-ink-900` active / `bg-sand-100` inactive):
-    1. Redlines (with Risk & Decision filter toolbar, Accept/Reject/Reset controls, and AI Prompt Rewriter).
-    2. Canvas (Synchronized Dual-Pane Review: Original Draft vs Consensus Redline Draft).
-    3. Compliance (Adherence Score banner, rule checklist, remediation status).
-    4. Debate (Multi-Agent StateGraph log of Auditor, Opposing Counsel, and Arbiter).
-    5. Obligations (Citation, Obligor, Duty, Trigger, Breach Penalty).
+  - Boutique detail header with circular `<` back button, centered `"Contract Studio"` label, Deal Room shortcut, `Ask AI Copilot` button, warm linen Summary Showcase (`Risk Severity X/100`, accepted count badge), and intuitive export buttons (`Download Redlined Word (.DOCX)`, `Clean Final (.DOCX)`, `Sync Deadlines (.ICS)`).
+  - Espresso Pill Segmented Tabs (`bg-ink-900` active / `bg-sand-100` inactive), each with a 1-line plain-English helper banner explaining what to do:
+    1. Redlines (with Risk & Decision filter toolbar, `Accept All Pending` quick action, Accept/Reject/Reset controls, and AI Prompt Rewriter).
+    2. Side-by-Side (Canvas: Synchronized Dual-Pane Review — Original Draft vs Consensus Redline Draft).
+    3. Playbook Check (Compliance: Adherence Score banner, rule checklist, remediation status).
+    4. AI Debate (Multi-Agent StateGraph log of Auditor, Opposing Counsel, and Arbiter).
+    5. Deadlines & Duties (Obligations: Citation, Obligor, Duty, Trigger, Breach Penalty + `.ICS` export).
 - **Telemetry & Floating Frosted Bottom Dock**:
   - Telemetry view includes 4 KPI cards paired with a warm linen `Workspace Summary` receipt card (`Analyzed Contracts`, `Total Tokens`, `Active Engine`, `Total Cost`) and full-width Terracotta `Open Cross-Doc Deal Room` button.
   - Centered floating frosted bottom pill dock (`bg-white/95 backdrop-blur-xl`) highlighting the active route (`home`, `studio`, `audit`) in a Dark Espresso rounded square (`bg-ink-900 text-white`), alongside a Terracotta center upload action button, animated Guided Tour bubble (`?`), and Settings gear trigger.
@@ -391,7 +393,7 @@ Implement in `backend/static/index.html` (and sync to `frontend/public/index.htm
    - `run_contractmind.bat`: Checks Python, installs dependencies, executes `python launch.py`.
    - `launch.py`: Configures directories, runs DB migration, launches Uvicorn on `0.0.0.0:8000`, logs to `backend/backend.log`, opens default browser to `http://localhost:8000`.
 2. Vercel Multi-Service Deployment (`vercel.json`):
-   - Fast routing rewrites `/api/*` to FastAPI backend and `/*` to Next.js bridge serving identical v2.0 Alpine UI.
+   - Vercel Services configuration (`services` + `rewrites`) routing `/api/*`, `/mcp*`, and `/health` to the `backend` FastAPI service and `/*` to the `frontend` Next.js service with a `BACKEND_URL` service binding.
 
 ================================================================================
 19. VERIFICATION CHECKLIST

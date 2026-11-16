@@ -28,8 +28,8 @@ class LLMGateway:
     """Routes prompts to configured provider with seamless fallback to secondary/simulator."""
 
     def __init__(self) -> None:
-        self.provider: str = settings.DEFAULT_LLM_PROVIDER or "simulator"
-        self.model: str = settings.DEFAULT_LLM_MODEL or "gemini-3.5-flash-lite"
+        self.provider: str = settings.DEFAULT_LLM_PROVIDER or "gemini"
+        self.model: str = settings.DEFAULT_LLM_MODEL or "gemini-2.5-flash"
         self.gemini_api_key: str = settings.GEMINI_API_KEY or ""
         self.openai_api_key: str = settings.OPENAI_API_KEY or ""
         self.anthropic_api_key: str = settings.ANTHROPIC_API_KEY or ""
@@ -46,8 +46,8 @@ class LLMGateway:
             "has_openai_key": bool(self.openai_api_key),
             "has_anthropic_key": bool(self.anthropic_api_key),
             "available_providers": [
-                {"id": "simulator", "name": "Deterministic Legal Simulator", "models": ["gemini-3.5-flash-lite", "simulator"]},
-                {"id": "gemini", "name": "Google Gemini", "models": ["gemini-3.5-flash-lite", "gemini-1.5-flash"]},
+                {"id": "gemini", "name": "Google Gemini", "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]},
+                {"id": "simulator", "name": "Deterministic Legal Simulator", "models": ["simulator"]},
                 {"id": "ollama", "name": "Local Ollama", "models": ["qwen3.5:4b", "llama3.2"]},
                 {"id": "openai", "name": "OpenAI", "models": ["gpt-4o", "gpt-4o-mini"]},
                 {"id": "anthropic", "name": "Anthropic", "models": ["claude-3-5-sonnet"]},
@@ -87,7 +87,11 @@ class LLMGateway:
     async def _call_gemini(self, prompt: str, system_prompt: str, model: str) -> tuple[str, int, int]:
         if not self.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY not configured")
-        target_model = model or "gemini-1.5-flash"
+        alias_map = {
+            "gemini-3.5-flash-lite": "gemini-2.5-flash-lite",
+            "gemini-1.5-flash": "gemini-2.5-flash",
+        }
+        target_model = alias_map.get(model or "", model or "gemini-2.5-flash")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={self.gemini_api_key}"
         payload = {
             "system_instruction": {"parts": [{"text": system_prompt}]},

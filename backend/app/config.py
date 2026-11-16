@@ -34,8 +34,8 @@ class Settings(BaseSettings):
 
     VERCEL: bool = _is_vercel()
 
-    DEFAULT_LLM_PROVIDER: str = "simulator"
-    DEFAULT_LLM_MODEL: str = "gemini-3.5-flash-lite"
+    DEFAULT_LLM_PROVIDER: str = "gemini"
+    DEFAULT_LLM_MODEL: str = "gemini-2.5-flash"
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""

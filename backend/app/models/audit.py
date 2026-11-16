@@ -12,6 +12,9 @@ from app.database import Base
 
 # Pricing per 1,000 tokens (USD) per architectural specification
 MODEL_PRICING_PER_1K: dict[str, tuple[float, float]] = {
+    "gemini-2.5-flash": (0.000075, 0.0003),
+    "gemini-2.5-flash-lite": (0.000075, 0.0003),
+    "gemini-2.5-pro": (0.00125, 0.005),
     "gemini-3.5-flash-lite": (0.000075, 0.0003),
     "gemini-1.5-flash": (0.000075, 0.0003),
     "gpt-4o": (0.005, 0.015),
